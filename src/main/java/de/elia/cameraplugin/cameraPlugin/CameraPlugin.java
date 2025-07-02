@@ -18,6 +18,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.ChatColor;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.command.Command;
@@ -40,8 +41,18 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private final Map<UUID, UUID> armorStandOwners = new HashMap<>();
     private final Map<UUID, UUID> hitboxEntities = new HashMap<>();
 
+    // Configurable values
+    private double maxDistance;
+    private int distanceWarningCooldown;
+    private double drowningDamage;
+    private boolean armorStandNameVisible;
+    private boolean armorStandVisible;
+    private boolean armorStandGravity;
+
     @Override
     public void onEnable() {
+        saveDefaultConfig();
+        loadConfigValues();
         this.getServer().getPluginManager().registerEvents(this, this);
         getLogger().info("CameraPlugin wurde aktiviert!");
     }
@@ -61,19 +72,23 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player)) {
-            sender.sendMessage("§cDieser Befehl kann nur von Spielern verwendet werden!");
+            sender.sendMessage(getMessage("no-player"));
             return true;
         }
 
         Player player = (Player) sender;
+        if (!player.hasPermission("camplugin.use")) {
+            player.sendMessage(getMessage("no-permission"));
+            return true;
+        }
 
         if (command.getName().equalsIgnoreCase("cam")) {
             if (cameraPlayers.containsKey(player.getUniqueId())) {
                 exitCameraMode(player);
-                player.sendMessage("§aKamera-Modus beendet.");
+                player.sendMessage(getMessage("camera-off"));
             } else {
                 enterCameraMode(player);
-                player.sendMessage("§aKamera-Modus aktiviert! Nutze /cam erneut zum Beenden.");
+                player.sendMessage(getMessage("camera-on"));
             }
             return true;
         }
@@ -93,11 +108,11 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         Location playerLocation = player.getLocation();
 
         ArmorStand armorStand = (ArmorStand) player.getWorld().spawnEntity(playerLocation, EntityType.ARMOR_STAND);
-        armorStand.setVisible(true);
-        armorStand.setGravity(true);
+        armorStand.setVisible(armorStandVisible);
+        armorStand.setGravity(armorStandGravity);
         armorStand.setCanPickupItems(false);
-        armorStand.setCustomName("§e" + player.getName() + "'s Körper");
-        armorStand.setCustomNameVisible(true);
+        armorStand.setCustomName(getMessage("armorstand.name-format").replace("{player}", player.getName()));
+        armorStand.setCustomNameVisible(armorStandNameVisible);
         armorStand.setInvulnerable(false);
         armorStand.setMarker(false);
         armorStand.setMaxHealth(20.0);
@@ -122,7 +137,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         hitbox.setSilent(true);
         hitbox.setAI(false);
         hitbox.setInvulnerable(false);
-        hitbox.setCustomName("§c[HITBOX] " + player.getName());
+        hitbox.setCustomName(getMessage("hitbox.name-format").replace("{player}", player.getName()));
         hitbox.setCustomNameVisible(false);
         hitbox.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
         hitbox.setProfession(Villager.Profession.NONE);
@@ -200,14 +215,14 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
                     return;
                 }
                 if (armorStand.getEyeLocation().getBlock().getType().isSolid()) {
-                    player.sendMessage("§cDein Körper erstickt! Kamera-Modus wird beendet.");
+                    player.sendMessage(getMessage("body-suffocating"));
                     exitCameraMode(player);
                     this.cancel();
                 }
                 if (armorStand.getRemainingAir() < armorStand.getMaximumAir() && armorStand.getRemainingAir() <= 0) {
                     if (armorStand.getTicksLived() % 20 == 0) {
-                        player.sendMessage("§cDein Körper ertrinkt!");
-                        applyDamageWithArmor(player, 2.0);
+                        player.sendMessage(getMessage("body-drowning"));
+                        applyDamageWithArmor(player, drowningDamage);
                         if (!player.isDead()) {
                             exitCameraMode(player);
                         }
@@ -267,7 +282,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
             if (damager.getUniqueId().equals(owner.getUniqueId())) {
                 event.setCancelled(true);
-                owner.sendMessage("§aKamera-Modus beendet.");
+                owner.sendMessage(getMessage("camera-off"));
                 exitCameraMode(owner);
                 return;
             }
@@ -278,7 +293,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             if (!owner.isDead()) {
                 String damagerName = damager instanceof Player ?
                         ((Player) damager).getName() : damager.getType().toString();
-                owner.sendMessage("§cDein Körper wurde von " + damagerName + " angegriffen! Kamera-Modus beendet.");
+                owner.sendMessage(getMessage("body-attacked").replace("{damager}", damagerName));
                 exitCameraMode(owner);
             }
             return;
@@ -288,7 +303,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         applyDamageWithArmor(owner, event.getFinalDamage());
 
         if (!owner.isDead()) {
-            owner.sendMessage("§cDein Körper wurde durch Umweltschaden verletzt! Kamera-Modus beendet.");
+            owner.sendMessage(getMessage("body-env-damage"));
             exitCameraMode(owner);
         }
     }
@@ -301,11 +316,11 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         if (ownerUUID == null) return;
         if (!player.getUniqueId().equals(ownerUUID)) {
             event.setCancelled(true);
-            player.sendMessage("§cDu kannst den Körper eines anderen Spielers nicht manipulieren!");
+            player.sendMessage(getMessage("cant-manipulate-other"));
             return;
         }
         event.setCancelled(true);
-        player.sendMessage("§aKamera-Modus beendet.");
+        player.sendMessage(getMessage("camera-off"));
         Player owner = Bukkit.getPlayer(ownerUUID);
         if (owner != null) {
             exitCameraMode(owner);
@@ -321,13 +336,13 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             if (ownerUUID != null) {
                 event.setCancelled(true);
                 if (player.getUniqueId().equals(ownerUUID)) {
-                    player.sendMessage("§aKamera-Modus beendet.");
+                    player.sendMessage(getMessage("camera-off"));
                     Player owner = Bukkit.getPlayer(ownerUUID);
                     if (owner != null) {
                         exitCameraMode(owner);
                     }
                 } else {
-                    player.sendMessage("§cDu kannst mit dem Körper eines anderen Spielers nicht interagieren!");
+                    player.sendMessage(getMessage("cant-interact-other"));
                 }
             }
         }
@@ -355,7 +370,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         if (cameraPlayers.containsKey(shooter.getUniqueId())) {
             event.setCancelled(true); // Generell Projektile verhindern
-            shooter.sendMessage("§cDu kannst im Kamera-Modus keine Projektile verwenden.");
+            shooter.sendMessage(getMessage("no-projectiles"));
         }
     }
 
@@ -404,18 +419,18 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         Block blockAt = to.getBlock();
         if (blockAt.getType() == Material.LAVA) {
-            player.sendMessage("§cDu kannst nicht durch Lava fliegen! Kamera-Modus wird beendet.");
+            player.sendMessage(getMessage("cant-fly-in-lava"));
             exitCameraMode(player);
             return;
         }
 
         Location standLoc = cameraPlayers.get(player.getUniqueId()).getArmorStand().getLocation();
-        if (!to.getWorld().equals(standLoc.getWorld()) || to.distanceSquared(standLoc) > 100 * 100) {
+        if (!to.getWorld().equals(standLoc.getWorld()) || to.distanceSquared(standLoc) > maxDistance * maxDistance) {
             event.setCancelled(true);
             long now = System.currentTimeMillis();
             if (distanceMessageCooldown.getOrDefault(player.getUniqueId(), 0L) < now) {
-                player.sendMessage("§cDu kannst dich nicht weiter als 100 Blöcke von deinem Körper entfernen!");
-                distanceMessageCooldown.put(player.getUniqueId(), now + TimeUnit.SECONDS.toMillis(3));
+                player.sendMessage(getMessage("distance-limit").replace("{distance}", String.valueOf(maxDistance)));
+                distanceMessageCooldown.put(player.getUniqueId(), now + TimeUnit.SECONDS.toMillis(distanceWarningCooldown));
             }
         }
     }
@@ -501,6 +516,19 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
                 }
             }.runTaskLater(this, 1L);
         }
+    }
+
+    private String getMessage(String path) {
+        return ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages." + path, ""));
+    }
+
+    private void loadConfigValues() {
+        maxDistance = getConfig().getDouble("camera-mode.max-distance", 100.0);
+        distanceWarningCooldown = getConfig().getInt("camera-mode.distance-warning-cooldown", 3);
+        drowningDamage = getConfig().getDouble("camera-mode.drowning-damage", 2.0);
+        armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
+        armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
+        armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
     }
 
     // *** CameraData Klasse erweitert ***
