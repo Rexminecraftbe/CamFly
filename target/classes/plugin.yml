@@ -1,0 +1,17 @@
+name: CamPlugin
+version: 1.0.0
+main: de.elia.cameraplugin.cameraPlugin.CameraPlugin
+api-version: 1.21
+author: YourName
+description: Ein Plugin für einen Kamera-Modus mit Rüstungsständer
+
+commands:
+  cam:
+    description: Aktiviert oder deaktiviert den Kamera-Modus
+    usage: /cam
+    permission: camplugin.use
+
+permissions:
+  camplugin.use:
+    description: Erlaubt die Nutzung des Kamera-Modus
+    default: true
