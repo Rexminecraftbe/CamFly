@@ -150,17 +150,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         boolean originalAllowFlight = player.getAllowFlight();
         boolean originalFlying = player.isFlying();
 
-        player.setGameMode(GameMode.CREATIVE);
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                if (cameraPlayers.containsKey(player.getUniqueId())) {
-                    player.setGameMode(GameMode.ADVENTURE);
-                    player.setAllowFlight(true);
-                    player.setFlying(true);
-                }
-            }
-        }.runTaskLater(this, 1L);
+        player.setGameMode(GameMode.ADVENTURE);
+        player.setAllowFlight(true);
+        player.setFlying(true);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
         player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, Integer.MAX_VALUE, 0, false, false));
 
