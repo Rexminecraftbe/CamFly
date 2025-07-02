@@ -151,6 +151,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         boolean originalFlying = player.isFlying();
 
         player.setGameMode(GameMode.CREATIVE);
+        player.setAllowFlight(true);
+        player.setFlying(true);
         new BukkitRunnable() {
             @Override
             public void run() {
