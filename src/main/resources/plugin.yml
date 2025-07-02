@@ -2,7 +2,7 @@ name: CamPlugin
 version: 1.0.0
 main: de.elia.cameraplugin.cameraPlugin.CameraPlugin
 api-version: 1.21
-author: Rexminecraft
+author: Rexminecraft343
 description: Ein Plugin für einen Kamera-Modus mit Rüstungsständer
 
 commands:
