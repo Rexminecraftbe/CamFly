@@ -1,9 +1,9 @@
 package de.elia.cameraplugin.cameraPlugin;
 
-import org.bukkit.Bukkit;
-import org.bukkit.GameMode;
-import org.bukkit.Location;
-import org.bukkit.Material;
+import org.bukkit.*;
+import org.bukkit.block.Block;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.*;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -18,25 +18,13 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.ChatColor;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
-import org.bukkit.SoundCategory;
-import de.elia.cameraplugin.cameraPlugin.CamCommand;
-import de.elia.cameraplugin.cameraPlugin.CamTabCompleter;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.bukkit.block.Block;
-import org.bukkit.scoreboard.Scoreboard;
-import org.bukkit.scoreboard.Team;
+import org.bukkit.SoundCategory;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.List;
-import java.util.Collections;
 
 public final class CameraPlugin extends JavaPlugin implements Listener {
 
@@ -46,10 +34,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private final Map<UUID, UUID> armorStandOwners = new HashMap<>();
     private final Map<UUID, UUID> hitboxEntities = new HashMap<>();
 
-    private static final String NO_COLLISION_TEAM = "cam_no_push";
-
     // Configurable values
-    private boolean maxDistanceEnabled;
     private double maxDistance;
     private int distanceWarningCooldown;
     private double drowningDamage;
@@ -61,9 +46,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     public void onEnable() {
         saveDefaultConfig();
         loadConfigValues();
-        setupNoCollisionTeam();
-        this.getCommand("cam").setExecutor(new CamCommand(this));
-        this.getCommand("cam").setTabCompleter(new CamTabCompleter());
         this.getServer().getPluginManager().registerEvents(this, this);
         getLogger().info("CameraPlugin wurde aktiviert!");
     }
@@ -80,13 +62,37 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         getLogger().info("CameraPlugin wurde deaktiviert!");
     }
 
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(getMessage("no-player"));
+            return true;
+        }
 
-    public void enterCameraMode(Player player) {
+        Player player = (Player) sender;
+        if (!player.hasPermission("camplugin.use")) {
+            player.sendMessage(getMessage("no-permission"));
+            return true;
+        }
+
+        if (command.getName().equalsIgnoreCase("cam")) {
+            if (cameraPlayers.containsKey(player.getUniqueId())) {
+                exitCameraMode(player);
+                player.sendMessage(getMessage("camera-off"));
+            } else {
+                enterCameraMode(player);
+                player.sendMessage(getMessage("camera-on"));
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void enterCameraMode(Player player) {
         // *** Inventar und Rüstung speichern ***
         PlayerInventory playerInventory = player.getInventory();
         ItemStack[] originalInventory = playerInventory.getContents();
         ItemStack[] originalArmor = playerInventory.getArmorContents();
-        boolean originalSilent = player.isSilent();
 
         // *** Inventar und Rüstung leeren ***
         playerInventory.clear();
@@ -140,7 +146,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.setGameMode(GameMode.CREATIVE);
         player.setAllowFlight(true);
         player.setFlying(true);
-        player.setSilent(true);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
         player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, Integer.MAX_VALUE, 0, false, false));
 
@@ -164,16 +169,15 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         // *** Gespeichertes Inventar an CameraData übergeben ***
-        cameraPlayers.put(player.getUniqueId(), new CameraData(armorStand, hitbox, originalGameMode, originalAllowFlight, originalFlying, originalSilent, originalInventory, originalArmor));
+        cameraPlayers.put(player.getUniqueId(), new CameraData(armorStand, hitbox, originalGameMode, originalAllowFlight, originalFlying, originalInventory, originalArmor));
         armorStandOwners.put(armorStand.getUniqueId(), player.getUniqueId());
         hitboxEntities.put(hitbox.getUniqueId(), player.getUniqueId());
 
         startArmorStandHealthCheck(player, armorStand);
         startHitboxSync(armorStand, hitbox);
-        addPlayerToNoCollisionTeam(player);
     }
 
-    public void exitCameraMode(Player player) {
+    private void exitCameraMode(Player player) {
         CameraData cameraData = cameraPlayers.get(player.getUniqueId());
         if (cameraData == null) return;
 
@@ -205,21 +209,13 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.setGameMode(cameraData.getOriginalGameMode());
         player.setAllowFlight(cameraData.getOriginalAllowFlight());
         player.setFlying(cameraData.getOriginalFlying());
-        player.setSilent(cameraData.getOriginalSilent());
-
-        removePlayerFromNoCollisionTeam(player);
 
         // Aufräumen
         armorStandOwners.remove(armorStand.getUniqueId());
         hitboxEntities.remove(hitbox.getUniqueId());
         armorStand.remove();
         hitbox.remove();
-
         cameraPlayers.remove(player.getUniqueId());
-    }
-
-    public boolean isInCameraMode(Player player) {
-        return cameraPlayers.containsKey(player.getUniqueId());
     }
 
     private void startArmorStandHealthCheck(Player player, ArmorStand armorStand) {
@@ -401,6 +397,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    // ##### HIER IST DIE ÄNDERUNG #####
     @EventHandler
     public void onPlayerInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
@@ -413,14 +410,14 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         Action action = event.getAction();
 
-        // Verhindert jegliche Interaktionen im Kamera-Modus
-        if (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK ||
-                action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK ||
-                action == Action.PHYSICAL) {
+        // Verhindert das Benutzen von fast allen Items (Rechtsklick)
+        // UND das Auslösen von Druckplatten und Stolperdrähten (Physical)
+        if (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK || action == Action.PHYSICAL) {
             event.setCancelled(true);
-            player.stopSound(SoundCategory.PLAYERS);
         }
+        // Anmerkung: Linksklick (Blockzerstörung) wird bereits durch den Adventure-Modus verhindert.
     }
+    // ##### ENDE DER ÄNDERUNG #####
 
     @EventHandler
     public void onPlayerDamage(EntityDamageEvent event) {
@@ -454,9 +451,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         Location standLoc = cameraPlayers.get(player.getUniqueId()).getArmorStand().getLocation();
-        // Always prevent players from switching worlds, optionally limit distance
-        if (!to.getWorld().equals(standLoc.getWorld()) ||
-                (maxDistanceEnabled && to.distanceSquared(standLoc) > maxDistance * maxDistance)) {
+        if (!to.getWorld().equals(standLoc.getWorld()) || to.distanceSquared(standLoc) > maxDistance * maxDistance) {
             event.setCancelled(true);
             long now = System.currentTimeMillis();
             if (distanceMessageCooldown.getOrDefault(player.getUniqueId(), 0L) < now) {
@@ -465,6 +460,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             }
         }
     }
+
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void suppressAdventureMoveSound(PlayerMoveEvent event) {
@@ -566,56 +562,17 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    public String getMessage(String path) {
+    private String getMessage(String path) {
         return ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages." + path, ""));
     }
 
     private void loadConfigValues() {
-        maxDistanceEnabled = getConfig().getBoolean("camera-mode.max-distance-enabled", true);
         maxDistance = getConfig().getDouble("camera-mode.max-distance", 100.0);
         distanceWarningCooldown = getConfig().getInt("camera-mode.distance-warning-cooldown", 3);
         drowningDamage = getConfig().getDouble("camera-mode.drowning-damage", 2.0);
         armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
         armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
         armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
-    }
-
-    private void setupNoCollisionTeam() {
-        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-        if (team == null) {
-            team = scoreboard.registerNewTeam(NO_COLLISION_TEAM);
-        }
-        team.setOption(Team.Option.COLLISION_RULE, Team.OptionStatus.NEVER);
-    }
-
-    private void addPlayerToNoCollisionTeam(Player player) {
-        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-        if (team != null) {
-            team.addEntry(player.getName());
-        }
-    }
-
-    private void removePlayerFromNoCollisionTeam(Player player) {
-        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-        if (team != null) {
-            team.removeEntry(player.getName());
-        }
-    }
-
-    public void reloadPlugin(Player initiator) {
-        for (UUID uuid : new HashSet<>(cameraPlayers.keySet())) {
-            Player camPlayer = Bukkit.getPlayer(uuid);
-            if (camPlayer != null) {
-                camPlayer.sendMessage(getMessage("reload-exit"));
-                exitCameraMode(camPlayer);
-            }
-        }
-        reloadConfig();
-        loadConfigValues();
-        setupNoCollisionTeam();
     }
 
     // *** CameraData Klasse erweitert ***
@@ -625,17 +582,15 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         private final GameMode originalGameMode;
         private final boolean originalAllowFlight;
         private final boolean originalFlying;
-        private final boolean originalSilent;
         private final ItemStack[] originalInventoryContents; // Für Inventar
         private final ItemStack[] originalArmorContents;     // Für Rüstung
 
-        public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents) {
+        public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents) {
             this.armorStand = armorStand;
             this.hitbox = hitbox;
             this.originalGameMode = originalGameMode;
             this.originalAllowFlight = originalAllowFlight;
             this.originalFlying = originalFlying;
-            this.originalSilent = originalSilent;
             this.originalInventoryContents = originalInventoryContents;
             this.originalArmorContents = originalArmorContents;
         }
@@ -645,7 +600,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         public GameMode getOriginalGameMode() { return originalGameMode; }
         public boolean getOriginalAllowFlight() { return originalAllowFlight; }
         public boolean getOriginalFlying() { return originalFlying; }
-        public boolean getOriginalSilent() { return originalSilent; }
         public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }
         public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
     }
