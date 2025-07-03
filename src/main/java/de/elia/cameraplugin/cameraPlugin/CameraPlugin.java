@@ -150,11 +150,30 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         boolean originalAllowFlight = player.getAllowFlight();
         boolean originalFlying = player.isFlying();
 
-        player.setGameMode(GameMode.ADVENTURE);
+        player.setGameMode(GameMode.CREATIVE);
         player.setAllowFlight(true);
         player.setFlying(true);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
         player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, Integer.MAX_VALUE, 0, false, false));
+
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                player.setGameMode(GameMode.ADVENTURE);
+                player.setAllowFlight(true); // ensure flight remains enabled
+                player.setFlying(true);       // keep player flying
+            }
+        }.runTaskLater(this, 1L);
+
+        double reaggroRadius = 64.0;
+        for (Entity entity : player.getNearbyEntities(reaggroRadius, reaggroRadius, reaggroRadius)) {
+            if (entity instanceof Mob) {
+                Mob mob = (Mob) entity;
+                if (player.equals(mob.getTarget())) {
+                    mob.setTarget(hitbox); // redirect aggro to hitbox
+                }
+            }
+        }
 
         // *** Gespeichertes Inventar an CameraData übergeben ***
         cameraPlayers.put(player.getUniqueId(), new CameraData(armorStand, hitbox, originalGameMode, originalAllowFlight, originalFlying, originalInventory, originalArmor));
