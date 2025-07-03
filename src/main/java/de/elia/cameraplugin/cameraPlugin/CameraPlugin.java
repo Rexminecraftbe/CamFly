@@ -21,6 +21,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.ChatColor;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.SoundCategory;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -100,6 +101,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         PlayerInventory playerInventory = player.getInventory();
         ItemStack[] originalInventory = playerInventory.getContents();
         ItemStack[] originalArmor = playerInventory.getArmorContents();
+        boolean originalSilent = player.isSilent();
 
         // *** Inventar und Rüstung leeren ***
         playerInventory.clear();
@@ -153,6 +155,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.setGameMode(GameMode.CREATIVE);
         player.setAllowFlight(true);
         player.setFlying(true);
+        player.setSilent(true);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
         player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, Integer.MAX_VALUE, 0, false, false));
 
@@ -176,7 +179,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         // *** Gespeichertes Inventar an CameraData übergeben ***
-        cameraPlayers.put(player.getUniqueId(), new CameraData(armorStand, hitbox, originalGameMode, originalAllowFlight, originalFlying, originalInventory, originalArmor));
+        cameraPlayers.put(player.getUniqueId(), new CameraData(armorStand, hitbox, originalGameMode, originalAllowFlight, originalFlying, originalSilent, originalInventory, originalArmor));
         armorStandOwners.put(armorStand.getUniqueId(), player.getUniqueId());
         hitboxEntities.put(hitbox.getUniqueId(), player.getUniqueId());
 
@@ -216,6 +219,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.setGameMode(cameraData.getOriginalGameMode());
         player.setAllowFlight(cameraData.getOriginalAllowFlight());
         player.setFlying(cameraData.getOriginalFlying());
+        player.setSilent(cameraData.getOriginalSilent());
 
         // Aufräumen
         armorStandOwners.remove(armorStand.getUniqueId());
@@ -393,24 +397,26 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    // ##### HIER IST DIE ÄNDERUNG #####
     @EventHandler
     public void onPlayerInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
+        if (player.getGameMode() == GameMode.ADVENTURE) {
+            player.stopSound(SoundCategory.PLAYERS);
+        }
         if (!cameraPlayers.containsKey(player.getUniqueId())) {
             return;
         }
 
         Action action = event.getAction();
 
-        // Verhindert das Benutzen von fast allen Items (Rechtsklick)
-        // UND das Auslösen von Druckplatten und Stolperdrähten (Physical)
-        if (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK || action == Action.PHYSICAL) {
+        // Verhindert jegliche Interaktionen im Kamera-Modus
+        if (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK ||
+                action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK ||
+                action == Action.PHYSICAL) {
             event.setCancelled(true);
+            player.stopSound(SoundCategory.PLAYERS);
         }
-        // Anmerkung: Linksklick (Blockzerstörung) wird bereits durch den Adventure-Modus verhindert.
     }
-    // ##### ENDE DER ÄNDERUNG #####
 
     @EventHandler
     public void onPlayerDamage(EntityDamageEvent event) {
@@ -451,6 +457,15 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("distance-limit").replace("{distance}", String.valueOf(maxDistance)));
                 distanceMessageCooldown.put(player.getUniqueId(), now + TimeUnit.SECONDS.toMillis(distanceWarningCooldown));
             }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void suppressAdventureMoveSound(PlayerMoveEvent event) {
+        Player player = event.getPlayer();
+        if (player.getGameMode() == GameMode.ADVENTURE) {
+            player.stopSound(SoundCategory.PLAYERS);
+            player.stopSound(SoundCategory.BLOCKS);
         }
     }
 
@@ -513,6 +528,14 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void suppressAdventureHitSound(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Player attacker &&
+                attacker.getGameMode() == GameMode.ADVENTURE) {
+            attacker.stopSound(SoundCategory.PLAYERS);
+        }
+    }
+
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         if (event.getWhoClicked() instanceof Player &&
@@ -557,15 +580,17 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         private final GameMode originalGameMode;
         private final boolean originalAllowFlight;
         private final boolean originalFlying;
+        private final boolean originalSilent;
         private final ItemStack[] originalInventoryContents; // Für Inventar
         private final ItemStack[] originalArmorContents;     // Für Rüstung
 
-        public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents) {
+        public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents) {
             this.armorStand = armorStand;
             this.hitbox = hitbox;
             this.originalGameMode = originalGameMode;
             this.originalAllowFlight = originalAllowFlight;
             this.originalFlying = originalFlying;
+            this.originalSilent = originalSilent;
             this.originalInventoryContents = originalInventoryContents;
             this.originalArmorContents = originalArmorContents;
         }
@@ -575,6 +600,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         public GameMode getOriginalGameMode() { return originalGameMode; }
         public boolean getOriginalAllowFlight() { return originalAllowFlight; }
         public boolean getOriginalFlying() { return originalFlying; }
+        public boolean getOriginalSilent() { return originalSilent; }
         public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }
         public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
     }
