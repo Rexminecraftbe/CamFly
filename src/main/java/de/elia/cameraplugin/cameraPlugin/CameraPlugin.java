@@ -26,6 +26,8 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.block.Block;
+import org.bukkit.scoreboard.Scoreboard;
+import org.bukkit.scoreboard.Team;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -42,6 +44,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private final Map<UUID, UUID> armorStandOwners = new HashMap<>();
     private final Map<UUID, UUID> hitboxEntities = new HashMap<>();
 
+    private static final String NO_COLLISION_TEAM = "cam_no_push";
+
     // Configurable values
     private double maxDistance;
     private int distanceWarningCooldown;
@@ -54,6 +58,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     public void onEnable() {
         saveDefaultConfig();
         loadConfigValues();
+        setupNoCollisionTeam();
         this.getServer().getPluginManager().registerEvents(this, this);
         getLogger().info("CameraPlugin wurde aktiviert!");
     }
@@ -185,6 +190,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         startArmorStandHealthCheck(player, armorStand);
         startHitboxSync(armorStand, hitbox);
+        addPlayerToNoCollisionTeam(player);
     }
 
     private void exitCameraMode(Player player) {
@@ -220,6 +226,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.setAllowFlight(cameraData.getOriginalAllowFlight());
         player.setFlying(cameraData.getOriginalFlying());
         player.setSilent(cameraData.getOriginalSilent());
+
+        removePlayerFromNoCollisionTeam(player);
 
         // Aufräumen
         armorStandOwners.remove(armorStand.getUniqueId());
@@ -571,6 +579,31 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
         armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
         armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
+    }
+
+    private void setupNoCollisionTeam() {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team == null) {
+            team = scoreboard.registerNewTeam(NO_COLLISION_TEAM);
+        }
+        team.setOption(Team.Option.COLLISION_RULE, Team.OptionStatus.NEVER);
+    }
+
+    private void addPlayerToNoCollisionTeam(Player player) {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team != null) {
+            team.addEntry(player.getName());
+        }
+    }
+
+    private void removePlayerFromNoCollisionTeam(Player player) {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team != null) {
+            team.removeEntry(player.getName());
+        }
     }
 
     // *** CameraData Klasse erweitert ***
