@@ -20,7 +20,6 @@ messages:
   reload-exit: "&cKamera-Modus beendet aufgrund des Plugin Neustarts."
 
 camera-mode:
-  # Toggle whether the distance limit should be enforced
   max-distance-enabled: true
   max-distance: 100.0
   distance-warning-cooldown: 3
