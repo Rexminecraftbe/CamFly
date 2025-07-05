@@ -47,6 +47,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private static final String NO_COLLISION_TEAM = "cam_no_push";
 
     // Configurable values
+    private boolean maxDistanceEnabled;
     private double maxDistance;
     private int distanceWarningCooldown;
     private double drowningDamage;
@@ -458,7 +459,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         Location standLoc = cameraPlayers.get(player.getUniqueId()).getArmorStand().getLocation();
-        if (!to.getWorld().equals(standLoc.getWorld()) || to.distanceSquared(standLoc) > maxDistance * maxDistance) {
+        // Always prevent players from switching worlds, optionally limit distance
+        if (!to.getWorld().equals(standLoc.getWorld()) ||
+                (maxDistanceEnabled && to.distanceSquared(standLoc) > maxDistance * maxDistance)) {
             event.setCancelled(true);
             long now = System.currentTimeMillis();
             if (distanceMessageCooldown.getOrDefault(player.getUniqueId(), 0L) < now) {
@@ -573,6 +576,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     }
 
     private void loadConfigValues() {
+        maxDistanceEnabled = getConfig().getBoolean("camera-mode.max-distance-enabled", true);
         maxDistance = getConfig().getDouble("camera-mode.max-distance", 100.0);
         distanceWarningCooldown = getConfig().getInt("camera-mode.distance-warning-cooldown", 3);
         drowningDamage = getConfig().getDouble("camera-mode.drowning-damage", 2.0);
