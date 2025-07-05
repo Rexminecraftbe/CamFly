@@ -14,6 +14,9 @@ messages:
   cant-interact-other: "&cDu kannst mit dem Körper eines anderen Spielers nicht interagieren!"
   armorstand.name-format: "&e{player}'s Körper"
   hitbox.name-format: "&c[HITBOX] {player}"
+  reload-start: "&ePlugin wird neugestartet..."
+  reload-success: "&aPlugin Reload erfolgreich."
+  reload-exit: "&cKamera-Modus beendet aufgrund des Plugin Neustarts."
 
 camera-mode:
   # Toggle whether the distance limit should be enforced

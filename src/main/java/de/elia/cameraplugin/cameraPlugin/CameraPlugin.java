@@ -35,6 +35,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.List;
+import java.util.Collections;
 
 public final class CameraPlugin extends JavaPlugin implements Listener {
 
@@ -90,6 +92,17 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         if (command.getName().equalsIgnoreCase("cam")) {
+            if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
+                if (!player.isOp()) {
+                    player.sendMessage(getMessage("no-permission"));
+                    return true;
+                }
+                player.sendMessage(getMessage("reload-start"));
+                reloadPlugin(player);
+                player.sendMessage(getMessage("reload-success"));
+                return true;
+            }
+
             if (cameraPlayers.containsKey(player.getUniqueId())) {
                 exitCameraMode(player);
                 player.sendMessage(getMessage("camera-off"));
@@ -100,7 +113,21 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             return true;
         }
         return false;
+
+    @Override
+    public java.util.List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (command.getName().equalsIgnoreCase("cam")) {
+            if (args.length == 1) {
+                String partial = args[0].toLowerCase();
+                if ("reload".startsWith(partial) && sender instanceof Player && sender.isOp()) {
+                    return java.util.Collections.singletonList("reload");
+                }
+                return java.util.Collections.emptyList();
+            }
+        }
+        return java.util.Collections.emptyList();
     }
+
 
     private void enterCameraMode(Player player) {
         // *** Inventar und Rüstung speichern ***
@@ -608,6 +635,19 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         if (team != null) {
             team.removeEntry(player.getName());
         }
+    }
+
+    private void reloadPlugin(Player initiator) {
+        for (UUID uuid : new HashSet<>(cameraPlayers.keySet())) {
+            Player camPlayer = Bukkit.getPlayer(uuid);
+            if (camPlayer != null) {
+                camPlayer.sendMessage(getMessage("reload-exit"));
+                exitCameraMode(camPlayer);
+            }
+        }
+        reloadConfig();
+        loadConfigValues();
+        setupNoCollisionTeam();
     }
 
     // *** CameraData Klasse erweitert ***
