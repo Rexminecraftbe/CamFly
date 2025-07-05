@@ -515,6 +515,11 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void filterCommandSuggestions(PlayerCommandSendEvent event) {
+        event.getCommands().removeIf(cmd -> cmd.equalsIgnoreCase("camplugin:cam"));
+    }
+
     @EventHandler
     public void onPlayerAttack(EntityDamageByEntityEvent event) {
         if (event.getDamager() instanceof Player &&
