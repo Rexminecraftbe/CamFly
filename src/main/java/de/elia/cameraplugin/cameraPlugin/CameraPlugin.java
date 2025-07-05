@@ -22,8 +22,8 @@ import org.bukkit.ChatColor;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.SoundCategory;
-import org.bukkit.command.Command;
-import org.bukkit.command.CommandSender;
+import de.elia.cameraplugin.cameraPlugin.CamCommand;
+import de.elia.cameraplugin.cameraPlugin.CamTabCompleter;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.block.Block;
 import org.bukkit.scoreboard.Scoreboard;
@@ -62,6 +62,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         saveDefaultConfig();
         loadConfigValues();
         setupNoCollisionTeam();
+        this.getCommand("cam").setExecutor(new CamCommand(this));
+        this.getCommand("cam").setTabCompleter(new CamTabCompleter());
         this.getServer().getPluginManager().registerEvents(this, this);
         getLogger().info("CameraPlugin wurde aktiviert!");
     }
@@ -78,58 +80,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         getLogger().info("CameraPlugin wurde deaktiviert!");
     }
 
-    @Override
-    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!(sender instanceof Player)) {
-            sender.sendMessage(getMessage("no-player"));
-            return true;
-        }
 
-        Player player = (Player) sender;
-        if (!player.hasPermission("camplugin.use")) {
-            player.sendMessage(getMessage("no-permission"));
-            return true;
-        }
-
-        if (command.getName().equalsIgnoreCase("cam")) {
-            if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
-                if (!player.isOp()) {
-                    player.sendMessage(getMessage("no-permission"));
-                    return true;
-                }
-                player.sendMessage(getMessage("reload-start"));
-                reloadPlugin(player);
-                player.sendMessage(getMessage("reload-success"));
-                return true;
-            }
-
-            if (cameraPlayers.containsKey(player.getUniqueId())) {
-                exitCameraMode(player);
-                player.sendMessage(getMessage("camera-off"));
-            } else {
-                enterCameraMode(player);
-                player.sendMessage(getMessage("camera-on"));
-            }
-            return true;
-        }
-        return false;
-
-    @Override
-    public java.util.List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (command.getName().equalsIgnoreCase("cam")) {
-            if (args.length == 1) {
-                String partial = args[0].toLowerCase();
-                if ("reload".startsWith(partial) && sender instanceof Player && sender.isOp()) {
-                    return java.util.Collections.singletonList("reload");
-                }
-                return java.util.Collections.emptyList();
-            }
-        }
-        return java.util.Collections.emptyList();
-    }
-
-
-    private void enterCameraMode(Player player) {
+    public void enterCameraMode(Player player) {
         // *** Inventar und Rüstung speichern ***
         PlayerInventory playerInventory = player.getInventory();
         ItemStack[] originalInventory = playerInventory.getContents();
@@ -221,7 +173,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         addPlayerToNoCollisionTeam(player);
     }
 
-    private void exitCameraMode(Player player) {
+    public void exitCameraMode(Player player) {
         CameraData cameraData = cameraPlayers.get(player.getUniqueId());
         if (cameraData == null) return;
 
@@ -262,7 +214,12 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         hitboxEntities.remove(hitbox.getUniqueId());
         armorStand.remove();
         hitbox.remove();
+
         cameraPlayers.remove(player.getUniqueId());
+    }
+
+    public boolean isInCameraMode(Player player) {
+        return cameraPlayers.containsKey(player.getUniqueId());
     }
 
     private void startArmorStandHealthCheck(Player player, ArmorStand armorStand) {
@@ -598,7 +555,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private String getMessage(String path) {
+    public String getMessage(String path) {
         return ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages." + path, ""));
     }
 
@@ -637,7 +594,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private void reloadPlugin(Player initiator) {
+    public void reloadPlugin(Player initiator) {
         for (UUID uuid : new HashSet<>(cameraPlayers.keySet())) {
             Player camPlayer = Bukkit.getPlayer(uuid);
             if (camPlayer != null) {

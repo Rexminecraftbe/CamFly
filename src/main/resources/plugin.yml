@@ -10,6 +10,7 @@ commands:
     description: Aktiviert oder deaktiviert den Kamera-Modus
     usage: /cam
     permission: camplugin.use
+    permission-message: "Du hast keine Berechtigung für diesen Command!"
 
 permissions:
   camplugin.use:
