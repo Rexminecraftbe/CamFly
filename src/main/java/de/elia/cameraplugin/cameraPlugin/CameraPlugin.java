@@ -223,10 +223,18 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     }
 
     private void startArmorStandHealthCheck(Player player, ArmorStand armorStand) {
+        final Location initialLocation = armorStand.getLocation().clone();
         new BukkitRunnable() {
             @Override
             public void run() {
                 if (!cameraPlayers.containsKey(player.getUniqueId()) || !player.isOnline() || armorStand.isDead()) {
+                    this.cancel();
+                    return;
+                }
+                if (!armorStand.getLocation().getWorld().equals(initialLocation.getWorld()) ||
+                        armorStand.getLocation().distanceSquared(initialLocation) > 0.01) {
+                    player.sendMessage(getMessage("body-moved"));
+                    exitCameraMode(player);
                     this.cancel();
                     return;
                 }
