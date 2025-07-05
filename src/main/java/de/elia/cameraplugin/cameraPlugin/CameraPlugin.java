@@ -246,6 +246,10 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
                 if (armorStand.getRemainingAir() < armorStand.getMaximumAir() && armorStand.getRemainingAir() <= 0) {
                     if (armorStand.getTicksLived() % 20 == 0) {
                         player.sendMessage(getMessage("body-drowning"));
+                        applyDamageWithArmor(player, drowningDamage);
+                        if (!player.isDead()) {
+                            exitCameraMode(player);
+                        }
                         exitCameraMode(player);
                         new BukkitRunnable() {
                             @Override
@@ -317,22 +321,32 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             }
 
             event.setCancelled(true);
+            String damagerName = damager instanceof Player ?
+                    ((Player) damager).getName() : damager.getType().toString();
             exitCameraMode(owner);
-            if (owner.isOnline() && !owner.isDead()) {
-                applyDamageWithArmor(owner, event.getDamage());
-                String damagerName = damager instanceof Player ?
-                        ((Player) damager).getName() : damager.getType().toString();
-                owner.sendMessage(getMessage("body-attacked").replace("{damager}", damagerName));
-            }
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    if (owner.isOnline() && !owner.isDead()) {
+                        applyDamageWithArmor(owner, event.getFinalDamage());
+                        owner.sendMessage(getMessage("body-attacked").replace("{damager}", damagerName));
+                    }
+                }
+            }.runTaskLater(this, 1L);
             return;
         }
 
         event.setCancelled(true);
         exitCameraMode(owner);
-        if (owner.isOnline() && !owner.isDead()) {
-            applyDamageWithArmor(owner, event.getDamage());
-            owner.sendMessage(getMessage("body-env-damage"));
-        }
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (owner.isOnline() && !owner.isDead()) {
+                    applyDamageWithArmor(owner, event.getFinalDamage());
+                    owner.sendMessage(getMessage("body-env-damage"));
+                }
+            }
+        }.runTaskLater(this, 1L);
     }
 
     @EventHandler(priority = EventPriority.HIGH)
