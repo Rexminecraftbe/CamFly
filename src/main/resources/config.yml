@@ -16,6 +16,8 @@ messages:
   hitbox.name-format: "&c[HITBOX] {player}"
 
 camera-mode:
+  # Toggle whether the distance limit should be enforced
+  max-distance-enabled: true
   max-distance: 100.0
   distance-warning-cooldown: 3
   drowning-damage: 2.0
