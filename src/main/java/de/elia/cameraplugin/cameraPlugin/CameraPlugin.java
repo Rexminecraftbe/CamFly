@@ -59,6 +59,10 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private boolean armorStandNameVisible;
     private boolean armorStandVisible;
     private boolean armorStandGravity;
+    private VisibilityMode playerVisibilityMode;
+    private boolean allowInvisibilityPotion;
+
+    private enum VisibilityMode { CAM, ALL, NONE }
 
     @Override
     public void onEnable() {
@@ -68,6 +72,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         this.getCommand("cam").setExecutor(new CamCommand(this));
         this.getCommand("cam").setTabCompleter(new CamTabCompleter());
         this.getServer().getPluginManager().registerEvents(this, this);
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            updateViewerTeam(online);
+        }
         getLogger().info("CameraPlugin wurde aktiviert!");
     }
 
@@ -160,7 +167,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.setAllowFlight(true);
         player.setFlying(true);
         player.setSilent(true);
-        player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
+        if (allowInvisibilityPotion) {
+            player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
+        }
         player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, Integer.MAX_VALUE, 0, false, false));
 
         new BukkitRunnable() {
@@ -169,6 +178,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
                 player.setGameMode(GameMode.ADVENTURE);
                 player.setAllowFlight(true); // ensure flight remains enabled
                 player.setFlying(true);       // keep player flying
+                if (allowInvisibilityPotion && !player.hasPotionEffect(PotionEffectType.INVISIBILITY)) {
+                    player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
+                }
             }
         }.runTaskLater(this, 1L);
 
@@ -189,6 +201,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         startHitboxSync(armorStand, hitbox);
         addPlayerToNoCollisionTeam(player);
+        updateViewerTeam(player);
+        updateVisibilityForAll();
     }
 
     public void exitCameraMode(Player player) {
@@ -230,6 +244,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.setSilent(cameraData.getOriginalSilent());
 
         removePlayerFromNoCollisionTeam(player);
+        updateViewerTeam(player);
 
         // Aufräumen
         armorStandOwners.remove(armorStand.getUniqueId());
@@ -242,6 +257,10 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         hitbox.remove();
 
         cameraPlayers.remove(player.getUniqueId());
+        for (Player other : Bukkit.getOnlinePlayers()) {
+            other.showPlayer(this, player);
+        }
+        updateVisibilityForAll();
     }
 
     public boolean isInCameraMode(Player player) {
@@ -460,6 +479,18 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             exitCameraMode(event.getPlayer());
         }
         distanceMessageCooldown.remove(event.getPlayer().getUniqueId());
+        removePlayerFromNoCollisionTeam(event.getPlayer());
+    }
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                updateViewerTeam(event.getPlayer());
+                updateVisibilityForAll();
+            }
+        }.runTaskLater(this, 1L);
     }
 
     @EventHandler
@@ -727,6 +758,13 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         maxDistance = getConfig().getDouble("camera-mode.max-distance", 100.0);
         distanceWarningCooldown = getConfig().getInt("camera-mode.distance-warning-cooldown", 3);
         drowningDamage = getConfig().getDouble("camera-mode.drowning-damage", 2.0);
+        String visibility = getConfig().getString("camera-mode.player_visibility_mode", "cam").toLowerCase();
+        playerVisibilityMode = switch (visibility) {
+            case "true" -> VisibilityMode.ALL;
+            case "false" -> VisibilityMode.NONE;
+            default -> VisibilityMode.CAM;
+        };
+        allowInvisibilityPotion = getConfig().getBoolean("camera-mode.allow_invisibility_potion", true);
         armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
         armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
         armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
@@ -739,6 +777,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             team = scoreboard.registerNewTeam(NO_COLLISION_TEAM);
         }
         team.setOption(Team.Option.COLLISION_RULE, Team.OptionStatus.NEVER);
+        team.setCanSeeFriendlyInvisibles(true);
     }
 
     private void addPlayerToNoCollisionTeam(Player player) {
@@ -757,6 +796,47 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    private void updateViewerTeam(Player player) {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team == null) return;
+
+        if (allowInvisibilityPotion && playerVisibilityMode == VisibilityMode.ALL) {
+            if (!team.hasEntry(player.getName())) {
+                team.addEntry(player.getName());
+            }
+        } else {
+            if (!cameraPlayers.containsKey(player.getUniqueId()) && team.hasEntry(player.getName())) {
+                team.removeEntry(player.getName());
+            }
+        }
+    }
+
+    private void applyVisibility(Player camPlayer, Player viewer) {
+        if (camPlayer.equals(viewer)) return;
+        switch (playerVisibilityMode) {
+            case CAM -> {
+                if (cameraPlayers.containsKey(viewer.getUniqueId())) {
+                    viewer.showPlayer(this, camPlayer);
+                } else {
+                    viewer.hidePlayer(this, camPlayer);
+                }
+            }
+            case ALL -> viewer.showPlayer(this, camPlayer);
+            case NONE -> viewer.hidePlayer(this, camPlayer);
+        }
+    }
+
+    private void updateVisibilityForAll() {
+        for (UUID camId : cameraPlayers.keySet()) {
+            Player cam = Bukkit.getPlayer(camId);
+            if (cam == null) continue;
+            for (Player viewer : Bukkit.getOnlinePlayers()) {
+                applyVisibility(cam, viewer);
+            }
+        }
+    }
+
     public void reloadPlugin(Player initiator) {
         for (UUID uuid : new HashSet<>(cameraPlayers.keySet())) {
             Player camPlayer = Bukkit.getPlayer(uuid);
@@ -768,6 +848,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         reloadConfig();
         loadConfigValues();
         setupNoCollisionTeam();
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            updateViewerTeam(online);
+        }
     }
 
     // *** CameraData Klasse erweitert ***
