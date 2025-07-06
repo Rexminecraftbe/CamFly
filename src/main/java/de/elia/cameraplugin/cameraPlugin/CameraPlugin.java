@@ -557,8 +557,25 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onPlayerAttack(EntityDamageByEntityEvent event) {
-        if (event.getDamager() instanceof Player &&
-                cameraPlayers.containsKey(event.getDamager().getUniqueId())) {
+        if (!(event.getDamager() instanceof Player attacker)) {
+            return;
+        }
+
+        if (!cameraPlayers.containsKey(attacker.getUniqueId())) {
+            return;
+        }
+
+        Entity target = event.getEntity();
+        UUID ownerUUID = null;
+
+        if (target instanceof ArmorStand) {
+            ownerUUID = armorStandOwners.get(target.getUniqueId());
+        } else if (target instanceof Villager) {
+            ownerUUID = hitboxEntities.get(target.getUniqueId());
+        }
+
+        // Cancel attacks on anything except the player's own armor stand or hitbox
+        if (ownerUUID == null || !ownerUUID.equals(attacker.getUniqueId())) {
             event.setCancelled(true);
         }
     }
