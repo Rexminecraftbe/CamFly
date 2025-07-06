@@ -187,7 +187,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         armorStandOwners.put(armorStand.getUniqueId(), player.getUniqueId());
         hitboxEntities.put(hitbox.getUniqueId(), player.getUniqueId());
 
-        applyDirectDamage(player, drowningDamage);
         startHitboxSync(armorStand, hitbox);
         addPlayerToNoCollisionTeam(player);
     }
