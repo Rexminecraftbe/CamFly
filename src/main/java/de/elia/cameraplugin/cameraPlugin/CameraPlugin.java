@@ -10,6 +10,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.*;
+import org.bukkit.event.entity.EntityPotionEffectEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.event.vehicle.VehicleEnterEvent;
@@ -39,6 +40,8 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.List;
 import java.util.Collections;
+import java.util.Collection;
+import java.util.ArrayList;
 
 @SuppressWarnings("removal")
 public final class CameraPlugin extends JavaPlugin implements Listener {
@@ -96,6 +99,11 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         PlayerInventory playerInventory = player.getInventory();
         ItemStack[] originalInventory = playerInventory.getContents();
         ItemStack[] originalArmor = playerInventory.getArmorContents();
+        Collection<PotionEffect> pausedEffects = new ArrayList<>();
+        for (PotionEffect effect : player.getActivePotionEffects()) {
+            pausedEffects.add(effect);
+            player.removePotionEffect(effect.getType());
+        }
         // Create clones for the armor stand so the player's original items
         // can be restored later while durability changes are preserved.
         ItemStack[] armorStandArmor = new ItemStack[originalArmor.length];
@@ -195,7 +203,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         // *** Gespeichertes Inventar an CameraData übergeben ***
-        cameraPlayers.put(player.getUniqueId(), new CameraData(armorStand, hitbox, originalGameMode, originalAllowFlight, originalFlying, originalSilent, originalInventory, originalArmor));
+        cameraPlayers.put(player.getUniqueId(), new CameraData(armorStand, hitbox, originalGameMode, originalAllowFlight, originalFlying, originalSilent, originalInventory, originalArmor, pausedEffects));
         armorStandOwners.put(armorStand.getUniqueId(), player.getUniqueId());
         hitboxEntities.put(hitbox.getUniqueId(), player.getUniqueId());
 
@@ -238,12 +246,17 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.removePotionEffect(PotionEffectType.INVISIBILITY);
         player.removePotionEffect(PotionEffectType.FIRE_RESISTANCE);
         player.setFireTicks(0);
+        for (PotionEffect effect : cameraData.getPausedEffects()) {
+            player.addPotionEffect(effect);
+        }
         player.setGameMode(cameraData.getOriginalGameMode());
         player.setAllowFlight(cameraData.getOriginalAllowFlight());
         player.setFlying(cameraData.getOriginalFlying());
         player.setSilent(cameraData.getOriginalSilent());
 
         removePlayerFromNoCollisionTeam(player);
+
+        cameraPlayers.remove(player.getUniqueId());
         updateViewerTeam(player);
 
         // Aufräumen
@@ -256,7 +269,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         armorStand.remove();
         hitbox.remove();
 
-        cameraPlayers.remove(player.getUniqueId());
         for (Player other : Bukkit.getOnlinePlayers()) {
             other.showPlayer(this, player);
         }
@@ -581,6 +593,17 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    @EventHandler
+    public void onPotionEffectChange(EntityPotionEffectEvent event) {
+        if (!(event.getEntity() instanceof Player player)) return;
+        if (!allowInvisibilityPotion) return;
+        if (playerVisibilityMode == VisibilityMode.NONE) return;
+        if (cameraPlayers.containsKey(player.getUniqueId())) return;
+        if (!PotionEffectType.INVISIBILITY.equals(event.getModifiedType())) return;
+
+        Bukkit.getScheduler().runTask(this, () -> updateViewerTeam(player));
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void filterCommandSuggestions(PlayerCommandSendEvent event) {
         event.getCommands().removeIf(cmd -> cmd.equalsIgnoreCase("camplugin:cam"));
@@ -802,12 +825,23 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
         if (team == null) return;
 
-        if (allowInvisibilityPotion && playerVisibilityMode == VisibilityMode.ALL) {
+        boolean inCam = cameraPlayers.containsKey(player.getUniqueId());
+        boolean shouldBeMember;
+
+        if (inCam) {
+            shouldBeMember = true;
+        } else if (allowInvisibilityPotion && playerVisibilityMode == VisibilityMode.ALL) {
+            shouldBeMember = !player.hasPotionEffect(PotionEffectType.INVISIBILITY);
+        } else {
+            shouldBeMember = false;
+        }
+
+        if (shouldBeMember) {
             if (!team.hasEntry(player.getName())) {
                 team.addEntry(player.getName());
             }
         } else {
-            if (!cameraPlayers.containsKey(player.getUniqueId()) && team.hasEntry(player.getName())) {
+            if (team.hasEntry(player.getName())) {
                 team.removeEntry(player.getName());
             }
         }
@@ -864,8 +898,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         private final boolean originalSilent;
         private final ItemStack[] originalInventoryContents; // Für Inventar
         private final ItemStack[] originalArmorContents;     // Für Rüstung
+        private final Collection<PotionEffect> pausedEffects;
 
-        public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents) {
+        public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents, Collection<PotionEffect> pausedEffects) {
             this.armorStand = armorStand;
             this.hitbox = hitbox;
             this.originalGameMode = originalGameMode;
@@ -874,6 +909,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             this.originalSilent = originalSilent;
             this.originalInventoryContents = originalInventoryContents;
             this.originalArmorContents = originalArmorContents;
+            this.pausedEffects = pausedEffects;
         }
 
         public ArmorStand getArmorStand() { return armorStand; }
@@ -884,5 +920,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         public boolean getOriginalSilent() { return originalSilent; }
         public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }
         public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
+        public Collection<PotionEffect> getPausedEffects() { return pausedEffects; }
     }
 }
