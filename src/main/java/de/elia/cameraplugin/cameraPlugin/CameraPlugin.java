@@ -302,28 +302,30 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }.runTaskTimer(this, 1L, 1L);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onArmorStandDamage(EntityDamageEvent event) {
-        Entity entity = event.getEntity();
+        Entity damagedEntity = event.getEntity();
         UUID ownerUUID = null;
 
-        if (entity instanceof ArmorStand) {
-            ownerUUID = armorStandOwners.get(entity.getUniqueId());
-        } else if (entity instanceof Villager) {
-            ownerUUID = hitboxEntities.get(entity.getUniqueId());
+        // Prüfe, ob es sich um unseren ArmorStand oder die zugehörige Hitbox handelt
+        if (damagedEntity instanceof ArmorStand) {
+            ownerUUID = armorStandOwners.get(damagedEntity.getUniqueId());
+        } else if (damagedEntity instanceof Villager) {
+            ownerUUID = hitboxEntities.get(damagedEntity.getUniqueId());
         }
 
-        if (ownerUUID == null) return;
+        if (ownerUUID == null) return; // Nicht von uns verwaltet
 
         Player owner = Bukkit.getPlayer(ownerUUID);
         if (owner == null || !owner.isOnline()) {
-            if (entity instanceof ArmorStand) {
-                armorStandOwners.remove(entity.getUniqueId());
+            // Spieler offline -> Aufräumen
+            if (damagedEntity instanceof ArmorStand) {
+                armorStandOwners.remove(damagedEntity.getUniqueId());
             } else {
-                hitboxEntities.remove(entity.getUniqueId());
+                hitboxEntities.remove(damagedEntity.getUniqueId());
             }
             cameraPlayers.remove(ownerUUID);
-            entity.remove();
+            damagedEntity.remove();
             return;
         }
 
@@ -333,59 +335,44 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        if (event instanceof EntityDamageByEntityEvent) {
-            EntityDamageByEntityEvent entityEvent = (EntityDamageByEntityEvent) event;
-            Entity damager = entityEvent.getDamager();
+        // ArmorStand soll keinen Schaden nehmen
+        event.setCancelled(true);
 
-            if (damager.getUniqueId().equals(owner.getUniqueId())) {
-                event.setCancelled(true);
+        // Spieler schlägt seinen eigenen Körper -> Kamera-Modus beenden
+        if (event instanceof EntityDamageByEntityEvent entityEvent) {
+            if (entityEvent.getDamager().getUniqueId().equals(owner.getUniqueId())) {
                 owner.sendMessage(getMessage("camera-off"));
                 exitCameraMode(owner);
                 return;
             }
-
-            // Berechne den Schaden mit der Rüstung des ArmorStands
-            double originalDamage = event.getDamage();
-            double finalDamage = event.getFinalDamage();
-
-            // Cancele das Event, damit der ArmorStand nicht stirbt
-            event.setCancelled(true);
-
-            String damagerName = damager instanceof Player ?
-                    ((Player) damager).getName() : damager.getType().toString();
-
-            exitCameraMode(owner);
-
-            // Übertrage den mit Rüstung berechneten Schaden an den Spieler
-            new BukkitRunnable() {
-                @Override
-                public void run() {
-                    if (owner.isOnline() && !owner.isDead()) {
-                        // Verwende finalDamage, da dieser bereits die Rüstungsreduktion beinhaltet
-                        applyDirectDamage(owner, finalDamage);
-                        owner.sendMessage(getMessage("body-attacked").replace("{damager}", damagerName));
-                    }
-                }
-            }.runTaskLater(CameraPlugin.this, 1L);
-            return;
         }
 
-        // Für Umweltschäden - berechne den Schaden mit Rüstung
+        // Ursprünglicher Schaden
         double originalDamage = event.getDamage();
-        double finalDamage = event.getFinalDamage();
+        ArmorStand armorStand = cameraPlayers.get(ownerUUID).getArmorStand();
 
-        // Cancele das Event, damit der ArmorStand nicht stirbt
-        event.setCancelled(true);
+        // Schaden basierend auf der Rüstung des ArmorStands neu berechnen
+        double reducedDamage = calculateArmorReducedDamage(originalDamage, armorStand);
 
+        // Name des Angreifers bestimmen
+        String damagerName = "Umgebung";
+        if (event instanceof EntityDamageByEntityEvent entityEvent) {
+            Entity damager = entityEvent.getDamager();
+            damagerName = damager instanceof Player ? damager.getName() : damager.getType().toString();
+        }
+
+        // Kamera-Modus beenden
         exitCameraMode(owner);
 
+        // Schaden nach einem Tick auf den Spieler anwenden
         new BukkitRunnable() {
             @Override
             public void run() {
                 if (owner.isOnline() && !owner.isDead()) {
-                    // Verwende finalDamage, da dieser bereits die Rüstungsreduktion beinhaltet
-                    applyDirectDamage(owner, finalDamage);
-                    owner.sendMessage(getMessage("body-env-damage"));
+                    applyDirectDamage(owner, reducedDamage);
+                    String messageKey = event instanceof EntityDamageByEntityEvent ?
+                            "body-attacked" : "body-env-damage";
+                    owner.sendMessage(getMessage(messageKey).replace("{damager}", damagerName));
                 }
             }
         }.runTaskLater(CameraPlugin.this, 1L);
@@ -609,6 +596,60 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     }
 
     /**
+     * Berechnet den Schaden nach Rüstungsreduktion anhand der Ausrüstung des ArmorStands.
+     * Diese Methode simuliert die Schadensberechnung eines normalen Spielers.
+     *
+     * @param originalDamage Der ursprüngliche Schaden vor Rüstungsreduktion.
+     * @param armorStand     Der ArmorStand, dessen Rüstung verwendet wird.
+     * @return Der reduzierte Schaden.
+     */
+    private double calculateArmorReducedDamage(double originalDamage, ArmorStand armorStand) {
+        ItemStack[] armor = armorStand.getEquipment().getArmorContents();
+        int armorPoints = 0;
+        int toughness = 0;
+
+        for (ItemStack item : armor) {
+            if (item == null || item.getType() == Material.AIR) continue;
+            switch (item.getType()) {
+                case LEATHER_HELMET -> armorPoints += 1;
+                case LEATHER_CHESTPLATE, ELYTRA -> armorPoints += 3;
+                case LEATHER_LEGGINGS -> armorPoints += 2;
+                case LEATHER_BOOTS -> armorPoints += 1;
+
+                case CHAINMAIL_HELMET -> armorPoints += 2;
+                case CHAINMAIL_CHESTPLATE -> armorPoints += 5;
+                case CHAINMAIL_LEGGINGS -> armorPoints += 4;
+                case CHAINMAIL_BOOTS -> armorPoints += 1;
+
+                case IRON_HELMET -> armorPoints += 2;
+                case IRON_CHESTPLATE -> armorPoints += 6;
+                case IRON_LEGGINGS -> armorPoints += 5;
+                case IRON_BOOTS -> armorPoints += 2;
+
+                case GOLDEN_HELMET -> armorPoints += 2;
+                case GOLDEN_CHESTPLATE -> armorPoints += 5;
+                case GOLDEN_LEGGINGS -> armorPoints += 3;
+                case GOLDEN_BOOTS -> armorPoints += 1;
+
+                case DIAMOND_HELMET -> { armorPoints += 3; toughness += 2; }
+                case DIAMOND_CHESTPLATE -> { armorPoints += 8; toughness += 2; }
+                case DIAMOND_LEGGINGS -> { armorPoints += 6; toughness += 2; }
+                case DIAMOND_BOOTS -> { armorPoints += 3; toughness += 2; }
+
+                case NETHERITE_HELMET -> { armorPoints += 3; toughness += 3; }
+                case NETHERITE_CHESTPLATE -> { armorPoints += 8; toughness += 3; }
+                case NETHERITE_LEGGINGS -> { armorPoints += 6; toughness += 3; }
+                case NETHERITE_BOOTS -> { armorPoints += 3; toughness += 3; }
+                default -> {}
+            }
+        }
+
+        double damageAfterToughness = originalDamage * (1 - Math.min(20.0,
+                Math.max(armorPoints / 5.0, armorPoints - originalDamage / (2.0 + toughness / 4.0))) / 25.0);
+        return Math.max(0, damageAfterToughness);
+    }
+
+    /**
      * Wendet Schaden direkt auf die Lebenspunkte des Spielers an, ohne die Rüstung erneut zu berechnen.
      * Dies wird verwendet, nachdem der Schaden bereits gegen die Rüstung des ArmorStands berechnet wurde.
      */
@@ -617,16 +658,16 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         damageImmunityBypass.add(player.getUniqueId());
         try {
-            // Rufe das normale Damage-Event auf, damit andere Plugins/Todesmeldungen korrekt funktionieren,
-            // aber stelle sicher, dass wir den exakten Schaden anwenden.
-            double newHealth = Math.max(0.0, player.getHealth() - damage);
+            // Berechne neue Lebenspunkte ohne weitere Rüstungsberechnung
+            double newHealth = Math.max(0, player.getHealth() - damage);
+            player.setHealth(newHealth);
 
+            // Erstelle ein DamageEvent, damit andere Plugins korrekt reagieren
             EntityDamageEvent damageEvent = new EntityDamageEvent(player, EntityDamageEvent.DamageCause.CUSTOM, damage);
-            player.setLastDamageCause(damageEvent); // Setzt die Schadensursache
-            player.setHealth(newHealth); // Setzt die Lebenspunkte direkt
-
+            damageEvent.setDamage(EntityDamageEvent.DamageModifier.BASE, damage);
+            player.setLastDamageCause(damageEvent);
         } finally {
-            // Entferne die Immunitäts-Umgehung mit einer kleinen Verzögerung.
+            // Entferne die Bypass-Markierung nach einem Tick
             new BukkitRunnable() {
                 @Override
                 public void run() {
@@ -640,20 +681,24 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
      * Copy durability values from the armor stand's equipment back to the
      * player's original armor items.
      */
-    private void syncArmorBack(Player player, ArmorStand armorStand, ItemStack[] playerOriginalArmor) {
-        ItemStack[] armorStandArmor = armorStand.getEquipment().getArmorContents();
-        for (int i = 0; i < armorStandArmor.length && i < playerOriginalArmor.length; i++) {
-            ItemStack standItem = armorStandArmor[i];
-            ItemStack playerItem = playerOriginalArmor[i];
-            if (standItem != null && playerItem != null && standItem.getType() == playerItem.getType()) {
-                ItemMeta standMeta = standItem.getItemMeta();
-                ItemMeta playerMeta = playerItem.getItemMeta();
-                if (standMeta instanceof Damageable && playerMeta instanceof Damageable) {
-                    ((Damageable) playerMeta).setDamage(((Damageable) standMeta).getDamage());
-                    playerItem.setItemMeta(playerMeta);
+    private void syncArmorBack(Player player, ArmorStand armorStand, ItemStack[] originalArmor) {
+        ItemStack[] standArmor = armorStand.getEquipment().getArmorContents();
+        for (int i = 0; i < originalArmor.length; i++) {
+            ItemStack original = originalArmor[i];
+            ItemStack fromStand = standArmor.length > i ? standArmor[i] : null;
+
+            if (original != null && fromStand != null && original.getType() == fromStand.getType()) {
+                ItemMeta standMeta = fromStand.getItemMeta();
+                ItemMeta originalMeta = original.getItemMeta();
+                if (standMeta instanceof Damageable && originalMeta instanceof Damageable) {
+                    int damage = ((Damageable) standMeta).getDamage();
+                    ((Damageable) originalMeta).setDamage(damage);
+                    original.setItemMeta(originalMeta);
                 }
             }
         }
+        // Sicherheitshalber noch einmal setzen
+        player.getInventory().setArmorContents(originalArmor);
     }
 
 
