@@ -383,6 +383,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         exitCameraMode(owner);
 
         // Schaden nach einem Tick auf den Spieler anwenden
+        String finalDamagerName = damagerName;
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -390,7 +391,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
                     applyDirectDamage(owner, reducedDamage);
                     String messageKey = event instanceof EntityDamageByEntityEvent ?
                             "body-attacked" : "body-env-damage";
-                    owner.sendMessage(getMessage(messageKey).replace("{damager}", damagerName));
+                    owner.sendMessage(getMessage(messageKey).replace("{damager}", finalDamagerName));
                 }
             }
         }.runTaskLater(CameraPlugin.this, 1L);

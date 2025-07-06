@@ -13,6 +13,7 @@ messages:
   no-projectiles: "&cDu kannst im Kamera-Modus keine Projektile verwenden."
   cant-manipulate-other: "&cDu kannst den Körper eines anderen Spielers nicht manipulieren!"
   cant-interact-other: "&cDu kannst mit dem Körper eines anderen Spielers nicht interagieren!"
+  cant-attack-other-body: "&cDu kannst im Kameramodus keine anderen Körper angreifen."
   armorstand.name-format: "&e{player}'s Körper"
   hitbox.name-format: "&c[HITBOX] {player}"
   reload-start: "&ePlugin wird neugestartet..."
