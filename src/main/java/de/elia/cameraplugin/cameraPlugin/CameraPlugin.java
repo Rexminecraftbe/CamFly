@@ -37,25 +37,21 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.List;
+import java.util.Collections;
 
 @SuppressWarnings("removal")
 public final class CameraPlugin extends JavaPlugin implements Listener {
 
-    // Speichert Daten für Spieler im Kameramodus (z.B. Originalinventar, ArmorStand)
     private final Map<UUID, CameraData> cameraPlayers = new HashMap<>();
-    // Verhindert Spam von Distanzwarnungen
     private final Map<UUID, Long> distanceMessageCooldown = new HashMap<>();
-    // Erlaubt es, dem Spieler Schaden zuzufügen, ohne dass unser eigener onPlayerDamage-Handler ihn abbricht
     private final Set<UUID> damageImmunityBypass = new HashSet<>();
-    // Ordnet ArmorStands ihren Spielern zu, um Schaden korrekt weiterzuleiten
     private final Map<UUID, UUID> armorStandOwners = new HashMap<>();
-    // Ordnet die unsichtbare Hitbox (Villager) ihrem Spieler zu
     private final Map<UUID, UUID> hitboxEntities = new HashMap<>();
 
-    // Name des Teams, das Kollisionen für Spieler im Kameramodus deaktiviert
     private static final String NO_COLLISION_TEAM = "cam_no_push";
 
-    // Konfigurierbare Werte aus der config.yml
+    // Configurable values
     private boolean maxDistanceEnabled;
     private double maxDistance;
     private int distanceWarningCooldown;
@@ -77,7 +73,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
-        // Beendet den Kameramodus für alle Spieler, um Fehler beim Deaktivieren zu vermeiden
+        // Erstellt eine Kopie der Keys, um ConcurrentModificationException zu vermeiden
         for (UUID playerId : new HashSet<>(cameraPlayers.keySet())) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null) {
@@ -87,46 +83,46 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         getLogger().info("CameraPlugin wurde deaktiviert!");
     }
 
-    /**
-     * Versetzt einen Spieler in den Kameramodus.
-     * Speichert sein Inventar, erstellt einen ArmorStand als Körper und macht den Spieler unsichtbar.
-     * @param player Der Spieler, der in den Modus wechseln soll.
-     */
+
     public void enterCameraMode(Player player) {
-        // Speichere den aktuellen Zustand des Spielers
+        // *** Inventar und Rüstung speichern ***
         PlayerInventory playerInventory = player.getInventory();
         ItemStack[] originalInventory = playerInventory.getContents();
         ItemStack[] originalArmor = playerInventory.getArmorContents();
+        // Create clones for the armor stand so the player's original items
+        // can be restored later while durability changes are preserved.
+        ItemStack[] armorStandArmor = new ItemStack[originalArmor.length];
+        for (int i = 0; i < originalArmor.length; i++) {
+            if (originalArmor[i] != null) {
+                armorStandArmor[i] = originalArmor[i].clone();
+            }
+        }
         boolean originalSilent = player.isSilent();
 
-        // Leere das Inventar und die Rüstung des Spielers
+        // *** Inventar und Rüstung leeren ***
         playerInventory.clear();
-        playerInventory.setArmorContents(new ItemStack[4]);
+        playerInventory.setArmorContents(new ItemStack[4]);// Leeres Array für Rüstungsslots
         player.updateInventory();
 
         Location playerLocation = player.getLocation();
 
-        // Erstelle den ArmorStand, der den Körper des Spielers repräsentiert
-        ArmorStand armorStand = player.getWorld().spawn(playerLocation, ArmorStand.class, as -> {
-            as.setVisible(armorStandVisible);
-            as.setGravity(armorStandGravity);
-            as.setCanPickupItems(false);
-            as.setCustomName(getMessage("armorstand.name-format").replace("{player}", player.getName()));
-            as.setCustomNameVisible(armorStandNameVisible);
-            as.setInvulnerable(false); // Muss Schaden nehmen können
-            as.setMarker(false);
-            as.setMaxHealth(20.0);
-            as.setHealth(20.0);
-            // Sperrt die Ausrüstung, damit sie nicht entfernt werden kann
-            as.addEquipmentLock(EquipmentSlot.HEAD, ArmorStand.LockType.REMOVING_OR_CHANGING);
-            as.addEquipmentLock(EquipmentSlot.CHEST, ArmorStand.LockType.REMOVING_OR_CHANGING);
-            as.addEquipmentLock(EquipmentSlot.LEGS, ArmorStand.LockType.REMOVING_OR_CHANGING);
-            as.addEquipmentLock(EquipmentSlot.FEET, ArmorStand.LockType.REMOVING_OR_CHANGING);
-            as.addEquipmentLock(EquipmentSlot.HAND, ArmorStand.LockType.REMOVING_OR_CHANGING);
-            as.addEquipmentLock(EquipmentSlot.OFF_HAND, ArmorStand.LockType.REMOVING_OR_CHANGING);
-        });
+        ArmorStand armorStand = (ArmorStand) player.getWorld().spawnEntity(playerLocation, EntityType.ARMOR_STAND);
+        armorStand.setVisible(armorStandVisible);
+        armorStand.setGravity(armorStandGravity);
+        armorStand.setCanPickupItems(false);
+        armorStand.setCustomName(getMessage("armorstand.name-format").replace("{player}", player.getName()));
+        armorStand.setCustomNameVisible(armorStandNameVisible);
+        armorStand.setInvulnerable(false);
+        armorStand.setMarker(false);
+        armorStand.setMaxHealth(20.0);
+        armorStand.setHealth(20.0);
+        armorStand.addEquipmentLock(EquipmentSlot.HEAD, ArmorStand.LockType.REMOVING_OR_CHANGING);
+        armorStand.addEquipmentLock(EquipmentSlot.CHEST, ArmorStand.LockType.REMOVING_OR_CHANGING);
+        armorStand.addEquipmentLock(EquipmentSlot.LEGS, ArmorStand.LockType.REMOVING_OR_CHANGING);
+        armorStand.addEquipmentLock(EquipmentSlot.FEET, ArmorStand.LockType.REMOVING_OR_CHANGING);
+        armorStand.addEquipmentLock(EquipmentSlot.HAND, ArmorStand.LockType.REMOVING_OR_CHANGING);
+        armorStand.addEquipmentLock(EquipmentSlot.OFF_HAND, ArmorStand.LockType.REMOVING_OR_CHANGING);
 
-        // Gib dem ArmorStand den Kopf des Spielers
         ItemStack playerHead = new ItemStack(Material.PLAYER_HEAD);
         SkullMeta skullMeta = (SkullMeta) playerHead.getItemMeta();
         if (skullMeta != null) {
@@ -135,54 +131,67 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
         armorStand.getEquipment().setHelmet(playerHead);
 
-        // Gib dem ArmorStand die Rüstung des Spielers
+        // Equip the armor stand with the player's armor pieces so durability and
+        // enchantments are retained while the player is in camera mode. The
+        // original armor items are stored in CameraData and will be returned to
+        // the player on exit. Using the same ItemStack objects ensures that any
+        // durability loss while the armor stand is damaged is preserved.
         armorStand.getEquipment().setArmorContents(originalArmor);
 
-        // Erstelle eine unsichtbare Hitbox, auf die Mobs zielen können
-        Villager hitbox = player.getWorld().spawn(playerLocation, Villager.class, v -> {
-            v.setInvisible(true);
-            v.setSilent(true);
-            v.setAI(false);
-            v.setInvulnerable(true); // Die Hitbox selbst soll keinen Schaden nehmen
-            v.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
-            v.setProfession(Villager.Profession.NONE);
-            v.setVillagerType(Villager.Type.PLAINS);
-            v.setCanPickupItems(false);
-        });
+        Villager hitbox = (Villager) player.getWorld().spawnEntity(playerLocation, EntityType.VILLAGER);
+        hitbox.setInvisible(true);
+        hitbox.setSilent(true);
+        hitbox.setAI(false);
+        hitbox.setInvulnerable(false);
+        hitbox.setCustomName(getMessage("hitbox.name-format").replace("{player}", player.getName()));
+        hitbox.setCustomNameVisible(false);
+        hitbox.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
+        hitbox.setProfession(Villager.Profession.NONE);
+        hitbox.setVillagerType(Villager.Type.PLAINS);
+        hitbox.setVillagerLevel(1);
+        hitbox.setCanPickupItems(false);
+        hitbox.teleport(armorStand.getLocation().add(0, 0.1, 0));
 
-        // Speichere den Originalzustand des Spielers (Gamemode, Flugstatus)
         GameMode originalGameMode = player.getGameMode();
         boolean originalAllowFlight = player.getAllowFlight();
         boolean originalFlying = player.isFlying();
 
-        // Ändere den Zustand des Spielers für den Kameramodus
-        player.setGameMode(GameMode.ADVENTURE); // Adventure, um Interaktion zu verhindern
+        player.setGameMode(GameMode.CREATIVE);
         player.setAllowFlight(true);
         player.setFlying(true);
         player.setSilent(true);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
         player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, Integer.MAX_VALUE, 0, false, false));
 
-        // Lenke Mobs, die den Spieler anvisiert haben, auf die neue Hitbox um
-        for (Entity entity : player.getNearbyEntities(64, 64, 64)) {
-            if (entity instanceof Mob mob && player.equals(mob.getTarget())) {
-                mob.setTarget(hitbox);
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                player.setGameMode(GameMode.ADVENTURE);
+                player.setAllowFlight(true); // ensure flight remains enabled
+                player.setFlying(true);       // keep player flying
+            }
+        }.runTaskLater(this, 1L);
+
+        double reaggroRadius = 64.0;
+        for (Entity entity : player.getNearbyEntities(reaggroRadius, reaggroRadius, reaggroRadius)) {
+            if (entity instanceof Mob) {
+                Mob mob = (Mob) entity;
+                if (player.equals(mob.getTarget())) {
+                    mob.setTarget(hitbox); // redirect aggro to hitbox
+                }
             }
         }
 
-        // Speichere alle relevanten Daten in der cameraPlayers Map
+        // *** Gespeichertes Inventar an CameraData übergeben ***
         cameraPlayers.put(player.getUniqueId(), new CameraData(armorStand, hitbox, originalGameMode, originalAllowFlight, originalFlying, originalSilent, originalInventory, originalArmor));
         armorStandOwners.put(armorStand.getUniqueId(), player.getUniqueId());
         hitboxEntities.put(hitbox.getUniqueId(), player.getUniqueId());
 
+        applyDirectDamage(player, drowningDamage);
         startHitboxSync(armorStand, hitbox);
         addPlayerToNoCollisionTeam(player);
     }
 
-    /**
-     * Beendet den Kameramodus für einen Spieler und stellt seinen Originalzustand wieder her.
-     * @param player Der Spieler, der den Modus verlassen soll.
-     */
     public void exitCameraMode(Player player) {
         CameraData cameraData = cameraPlayers.get(player.getUniqueId());
         if (cameraData == null) return;
@@ -190,25 +199,29 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         ArmorStand armorStand = cameraData.getArmorStand();
         Villager hitbox = cameraData.getHitbox();
 
-        // Lenke Mobs wieder auf den Spieler um
-        for (Entity entity : armorStand.getNearbyEntities(64, 64, 64)) {
-            if (entity instanceof Mob mob && (armorStand.equals(mob.getTarget()) || hitbox.equals(mob.getTarget()))) {
-                mob.setTarget(player);
+        double reaggroRadius = 64.0;
+        for (Entity entity : armorStand.getNearbyEntities(reaggroRadius, reaggroRadius, reaggroRadius)) {
+            if (entity instanceof Mob) {
+                Mob mob = (Mob) entity;
+                if (armorStand.equals(mob.getTarget()) || hitbox.equals(mob.getTarget())) {
+                    mob.setTarget(player);
+                }
             }
         }
 
-        // Teleportiere Spieler zum Körper, bevor der Zustand wiederhergestellt wird
+        // Zuerst zum Körper teleportieren
         player.teleport(armorStand.getLocation());
-        // Synchronisiere die Haltbarkeit der Rüstung zurück zum Spieler
+        // Synchronise durability from the armor stand back to the player's items
         syncArmorBack(player, armorStand, cameraData.getOriginalArmorContents());
 
-        // Stelle das Inventar und die Rüstung des Spielers wieder her
-        PlayerInventory playerInventory = player.getInventory();
-        playerInventory.clear();
-        playerInventory.setContents(cameraData.getOriginalInventoryContents());
-        player.updateInventory(); // Wichtig, damit die Rüstung sofort wiederhergestellt wird
 
-        // Entferne Effekte und stelle den Originalzustand wieder her
+        // *** Inventar und Rüstung wiederherstellen ***
+        PlayerInventory playerInventory = player.getInventory();
+        playerInventory.clear(); // Sicherheitshalber leeren, falls Items hinzugefügt wurden
+        playerInventory.setContents(cameraData.getOriginalInventoryContents());
+        playerInventory.setArmorContents(cameraData.getOriginalArmorContents());
+        player.updateInventory();
+
         player.removePotionEffect(PotionEffectType.INVISIBILITY);
         player.removePotionEffect(PotionEffectType.FIRE_RESISTANCE);
         player.setFireTicks(0);
@@ -219,32 +232,68 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         removePlayerFromNoCollisionTeam(player);
 
-        // Räume die erstellten Entities und Daten auf
+        // Aufräumen
         armorStandOwners.remove(armorStand.getUniqueId());
         hitboxEntities.remove(hitbox.getUniqueId());
+
+        // Clear equipment before removing to avoid item drops or duplication
+        armorStand.getEquipment().setArmorContents(new ItemStack[4]);
+        armorStand.getEquipment().setHelmet(new ItemStack(Material.AIR));
         armorStand.remove();
         hitbox.remove();
+
         cameraPlayers.remove(player.getUniqueId());
     }
 
-    /**
-     * Prüft, ob sich ein Spieler im Kameramodus befindet.
-     * @param player Der zu prüfende Spieler.
-     * @return true, wenn der Spieler im Kameramodus ist.
-     */
     public boolean isInCameraMode(Player player) {
         return cameraPlayers.containsKey(player.getUniqueId());
     }
 
-    /**
-     * Synchronisiert die Position der Hitbox mit der des ArmorStands.
-     */
+    private void startArmorStandHealthCheck(Player player, ArmorStand armorStand) {
+        final Location initialLocation = armorStand.getLocation().clone();
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!cameraPlayers.containsKey(player.getUniqueId()) || !player.isOnline() || armorStand.isDead()) {
+                    this.cancel();
+                    return;
+                }
+                if (!armorStand.getLocation().getWorld().equals(initialLocation.getWorld()) ||
+                        armorStand.getLocation().distanceSquared(initialLocation) > 0.01) {
+                    player.sendMessage(getMessage("body-moved"));
+                    exitCameraMode(player);
+                    this.cancel();
+                    return;
+                }
+                if (armorStand.getEyeLocation().getBlock().getType().isSolid()) {
+                    player.sendMessage(getMessage("body-suffocating"));
+                    exitCameraMode(player);
+                    this.cancel();
+                }
+                if (armorStand.getRemainingAir() < armorStand.getMaximumAir() && armorStand.getRemainingAir() <= 0) {
+                    if (armorStand.getTicksLived() % 20 == 0) {
+                        player.sendMessage(getMessage("body-drowning"));
+
+                        exitCameraMode(player);
+                        new BukkitRunnable() {
+                            @Override
+                            public void run() {
+                                if (player.isOnline() && !player.isDead()) {
+                                    applyDamageWithArmor(player, drowningDamage);
+                                }
+                            }
+                        }.runTaskLater(CameraPlugin.this, 1L);
+                    }
+                }
+            }
+        }.runTaskTimer(this, 20L, 1L);
+    }
+
     private void startHitboxSync(ArmorStand armorStand, Villager hitbox) {
         new BukkitRunnable() {
             @Override
             public void run() {
-                // Stoppe, wenn der ArmorStand oder die Hitbox nicht mehr existiert
-                if (armorStand.isDead() || hitbox.isDead() || !cameraPlayers.containsKey(armorStandOwners.get(armorStand.getUniqueId()))) {
+                if (armorStand.isDead() || hitbox.isDead()) {
                     this.cancel();
                     return;
                 }
@@ -253,32 +302,28 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }.runTaskTimer(this, 1L, 1L);
     }
 
-    /**
-     * Behandelt Schaden, der dem ArmorStand oder der Hitbox zugefügt wird.
-     * Leitet den Schaden an den Spieler weiter und beendet den Kameramodus.
-     */
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onArmorStandDamage(EntityDamageEvent event) {
-        Entity damagedEntity = event.getEntity();
+        Entity entity = event.getEntity();
         UUID ownerUUID = null;
 
-        // Finde heraus, ob die beschädigte Entity ein Körper (ArmorStand) eines Spielers ist
-        if (damagedEntity instanceof ArmorStand) {
-            ownerUUID = armorStandOwners.get(damagedEntity.getUniqueId());
-        } else if (damagedEntity instanceof Villager) {
-            // Schaden an der Hitbox wird ebenfalls behandelt (sollte aber invulnerable sein)
-            ownerUUID = hitboxEntities.get(damagedEntity.getUniqueId());
+        if (entity instanceof ArmorStand) {
+            ownerUUID = armorStandOwners.get(entity.getUniqueId());
+        } else if (entity instanceof Villager) {
+            ownerUUID = hitboxEntities.get(entity.getUniqueId());
         }
 
-        if (ownerUUID == null) return; // Nicht unser ArmorStand/Hitbox
+        if (ownerUUID == null) return;
 
         Player owner = Bukkit.getPlayer(ownerUUID);
         if (owner == null || !owner.isOnline()) {
-            // Wenn der Spieler offline ist, räume die Entities auf
-            if (damagedEntity instanceof ArmorStand) armorStandOwners.remove(damagedEntity.getUniqueId());
-            else hitboxEntities.remove(damagedEntity.getUniqueId());
+            if (entity instanceof ArmorStand) {
+                armorStandOwners.remove(entity.getUniqueId());
+            } else {
+                hitboxEntities.remove(entity.getUniqueId());
+            }
             cameraPlayers.remove(ownerUUID);
-            damagedEntity.remove();
+            entity.remove();
             return;
         }
 
@@ -288,183 +333,89 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        // Verhindere, dass der ArmorStand tatsächlich Schaden nimmt oder stirbt
-        event.setCancelled(true);
+        if (event instanceof EntityDamageByEntityEvent) {
+            EntityDamageByEntityEvent entityEvent = (EntityDamageByEntityEvent) event;
+            Entity damager = entityEvent.getDamager();
 
-        // Wenn der Spieler seinen eigenen Körper schlägt, beende den Modus
-        if (event instanceof EntityDamageByEntityEvent entityEvent) {
-            if (entityEvent.getDamager().getUniqueId().equals(owner.getUniqueId())) {
+            if (damager.getUniqueId().equals(owner.getUniqueId())) {
+                event.setCancelled(true);
                 owner.sendMessage(getMessage("camera-off"));
                 exitCameraMode(owner);
                 return;
             }
+
+            // Berechne den Schaden mit der Rüstung des ArmorStands
+            double originalDamage = event.getDamage();
+            double finalDamage = event.getFinalDamage();
+
+            // Cancele das Event, damit der ArmorStand nicht stirbt
+            event.setCancelled(true);
+
+            String damagerName = damager instanceof Player ?
+                    ((Player) damager).getName() : damager.getType().toString();
+
+            exitCameraMode(owner);
+
+            // Übertrage den mit Rüstung berechneten Schaden an den Spieler
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    if (owner.isOnline() && !owner.isDead()) {
+                        // Verwende finalDamage, da dieser bereits die Rüstungsreduktion beinhaltet
+                        applyDirectDamage(owner, finalDamage);
+                        owner.sendMessage(getMessage("body-attacked").replace("{damager}", damagerName));
+                    }
+                }
+            }.runTaskLater(CameraPlugin.this, 1L);
+            return;
         }
 
-        // Hol den rohen Schaden, bevor irgendwelche Reduktionen angewendet wurden
+        // Für Umweltschäden - berechne den Schaden mit Rüstung
         double originalDamage = event.getDamage();
-        ArmorStand armorStand = cameraPlayers.get(ownerUUID).getArmorStand();
+        double finalDamage = event.getFinalDamage();
 
-        // Berechne den Schaden neu, basierend auf der Rüstung des ArmorStands
-        double reducedDamage = calculateArmorReducedDamage(originalDamage, armorStand);
+        // Cancele das Event, damit der ArmorStand nicht stirbt
+        event.setCancelled(true);
 
-        // Hol den Namen des Angreifers, falls vorhanden
-        String damagerName = "Umgebung";
-        if (event instanceof EntityDamageByEntityEvent entityEvent) {
-            Entity damager = entityEvent.getDamager();
-            damagerName = damager instanceof Player ? damager.getName() : damager.getType().toString();
-        }
-
-        // Beende den Kameramodus
         exitCameraMode(owner);
 
-        // Wende den berechneten Schaden nach einer kleinen Verzögerung auf den Spieler an
-        String finalDamagerName = damagerName;
         new BukkitRunnable() {
             @Override
             public void run() {
                 if (owner.isOnline() && !owner.isDead()) {
-                    applyDirectDamage(owner, reducedDamage);
-                    String messageKey = event instanceof EntityDamageByEntityEvent ? "body-attacked" : "body-env-damage";
-                    owner.sendMessage(getMessage(messageKey).replace("{damager}", finalDamagerName));
+                    // Verwende finalDamage, da dieser bereits die Rüstungsreduktion beinhaltet
+                    applyDirectDamage(owner, finalDamage);
+                    owner.sendMessage(getMessage("body-env-damage"));
                 }
             }
         }.runTaskLater(CameraPlugin.this, 1L);
     }
 
-    // ... (Andere Event-Handler wie onPlayerInteract, onPlayerMove, etc. bleiben größtenteils gleich)
-    // Ich habe die wichtigsten neuen Methoden unten hinzugefügt und die alten ersetzt/aktualisiert.
-
-    /**
-     * Berechnet den Schaden nach Rüstungsreduktion anhand der Ausrüstung des ArmorStands.
-     * Diese Methode simuliert die Schadensberechnung eines normalen Spielers.
-     * @param originalDamage Der ursprüngliche Schaden vor Rüstungsreduktion.
-     * @param armorStand Der ArmorStand, dessen Rüstung verwendet wird.
-     * @return Der reduzierte Schaden.
-     */
-    private double calculateArmorReducedDamage(double originalDamage, ArmorStand armorStand) {
-        ItemStack[] armor = armorStand.getEquipment().getArmorContents();
-        int armorPoints = 0;
-        int toughness = 0;
-
-        for (ItemStack item : armor) {
-            if (item == null || item.getType() == Material.AIR) continue;
-            // Bestimme Rüstungspunkte und Zähigkeit basierend auf dem Material
-            switch (item.getType()) {
-                case LEATHER_HELMET -> armorPoints += 1;
-                case LEATHER_CHESTPLATE, ELYTRA -> armorPoints += 3;
-                case LEATHER_LEGGINGS -> armorPoints += 2;
-                case LEATHER_BOOTS -> armorPoints += 1;
-
-                case CHAINMAIL_HELMET -> armorPoints += 2;
-                case CHAINMAIL_CHESTPLATE -> armorPoints += 5;
-                case CHAINMAIL_LEGGINGS -> armorPoints += 4;
-                case CHAINMAIL_BOOTS -> armorPoints += 1;
-
-                case IRON_HELMET -> armorPoints += 2;
-                case IRON_CHESTPLATE -> armorPoints += 6;
-                case IRON_LEGGINGS -> armorPoints += 5;
-                case IRON_BOOTS -> armorPoints += 2;
-
-                case GOLDEN_HELMET -> armorPoints += 2;
-                case GOLDEN_CHESTPLATE -> armorPoints += 5;
-                case GOLDEN_LEGGINGS -> armorPoints += 3;
-                case GOLDEN_BOOTS -> armorPoints += 1;
-
-                case DIAMOND_HELMET -> { armorPoints += 3; toughness += 2; }
-                case DIAMOND_CHESTPLATE -> { armorPoints += 8; toughness += 2; }
-                case DIAMOND_LEGGINGS -> { armorPoints += 6; toughness += 2; }
-                case DIAMOND_BOOTS -> { armorPoints += 3; toughness += 2; }
-
-                case NETHERITE_HELMET -> { armorPoints += 3; toughness += 3; }
-                case NETHERITE_CHESTPLATE -> { armorPoints += 8; toughness += 3; }
-                case NETHERITE_LEGGINGS -> { armorPoints += 6; toughness += 3; }
-                case NETHERITE_BOOTS -> { armorPoints += 3; toughness += 3; }
-
-                default -> {}
-            }
-        }
-
-        // Vanilla Minecraft Schadensformel für Rüstung
-        float damageReduction = (float) (armorPoints * 0.04); // Jeder Rüstungspunkt blockt 4% Schaden
-        float toughDamage = (float) (originalDamage * (1.0 - toughness * 0.04));
-
-        double damageAfterToughness = originalDamage * (1 - Math.min(20.0, Math.max(armorPoints / 5.0, armorPoints - originalDamage / (2.0 + toughness / 4.0))) / 25.0);
-        return Math.max(0, damageAfterToughness);
-    }
-
-    /**
-     * Wendet Schaden direkt auf die Lebenspunkte des Spielers an und umgeht dabei die erneute
-     * Rüstungsberechnung des Spielers sowie die standardmäßige Unverwundbarkeitszeit.
-     * @param player Der Spieler, der Schaden erleiden soll.
-     * @param damage Die Höhe des Schadens.
-     */
-    private void applyDirectDamage(Player player, double damage) {
-        if (damage <= 0 || player.isDead()) return;
-
-        // Füge den Spieler zur Bypass-Liste hinzu, damit unser onPlayerDamage Event den Schaden nicht blockiert
-        damageImmunityBypass.add(player.getUniqueId());
-        try {
-            // Berechne die neuen Lebenspunkte, stelle sicher, dass sie nicht unter 0 fallen
-            double newHealth = Math.max(0, player.getHealth() - damage);
-            player.setHealth(newHealth);
-
-            // Erstelle ein "Fake" Damage-Event, damit Todesnachrichten und andere Plugins korrekt funktionieren
-            EntityDamageEvent damageEvent = new EntityDamageEvent(player, EntityDamageEvent.DamageCause.CUSTOM, damage);
-            damageEvent.setDamage(EntityDamageEvent.DamageModifier.BASE, damage);
-            player.setLastDamageCause(damageEvent);
-        } finally {
-            // Entferne den Spieler nach einem Tick wieder aus der Bypass-Liste
-            new BukkitRunnable() {
-                @Override
-                public void run() {
-                    damageImmunityBypass.remove(player.getUniqueId());
-                }
-            }.runTaskLater(this, 1L);
-        }
-    }
-
-    /**
-     * Überträgt die Haltbarkeit der Rüstungsteile vom ArmorStand zurück auf die
-     * ursprünglichen Rüstungs-ItemStacks des Spielers.
-     * @param player Der Spieler.
-     * @param armorStand Der ArmorStand mit der beschädigten Rüstung.
-     * @param originalArmor Die ursprünglichen Rüstungsitems des Spielers.
-     */
-    private void syncArmorBack(Player player, ArmorStand armorStand, ItemStack[] originalArmor) {
-        ItemStack[] standArmor = armorStand.getEquipment().getArmorContents();
-        for (int i = 0; i < originalArmor.length; i++) {
-            ItemStack original = originalArmor[i];
-            ItemStack fromStand = standArmor.length > i ? standArmor[i] : null;
-
-            // Stelle sicher, dass beide Items existieren und vom gleichen Typ sind
-            if (original != null && fromStand != null && original.getType() == fromStand.getType()) {
-                ItemMeta standMeta = fromStand.getItemMeta();
-                ItemMeta originalMeta = original.getItemMeta();
-                // Übertrage den Schaden (Haltbarkeitsverlust)
-                if (standMeta instanceof Damageable && originalMeta instanceof Damageable) {
-                    int damage = ((Damageable) standMeta).getDamage();
-                    ((Damageable) originalMeta).setDamage(damage);
-                    original.setItemMeta(originalMeta);
-                }
-            }
-        }
-        // Gib dem Spieler die aktualisierte Rüstung zurück (technisch gesehen nicht nötig, da originalArmor eine Referenz ist, aber zur Sicherheit)
-        player.getInventory().setArmorContents(originalArmor);
-    }
-
-    // Der Rest deiner Klasse (onPlayerQuit, onPlayerMove, etc.) kann hier folgen.
-    // Ich füge die restlichen Methoden aus deinem Originalcode hinzu, damit es vollständig ist.
-
     @EventHandler(priority = EventPriority.HIGH)
     public void onVillagerInteract(PlayerInteractEntityEvent event) {
-        if (event.getRightClicked() instanceof Villager && hitboxEntities.containsKey(event.getRightClicked().getUniqueId())) {
-            event.setCancelled(true);
+        Entity entity = event.getRightClicked();
+        Player player = event.getPlayer();
+        if (entity instanceof Villager) {
+            UUID ownerUUID = hitboxEntities.get(entity.getUniqueId());
+            if (ownerUUID != null) {
+                event.setCancelled(true);
+                if (player.getUniqueId().equals(ownerUUID)) {
+                    player.sendMessage(getMessage("camera-off"));
+                    Player owner = Bukkit.getPlayer(ownerUUID);
+                    if (owner != null) {
+                        exitCameraMode(owner);
+                    }
+                } else {
+                    player.sendMessage(getMessage("cant-interact-other"));
+                }
+            }
         }
     }
 
     @EventHandler
     public void onMobTarget(EntityTargetEvent event) {
-        if (!(event.getTarget() instanceof Player player)) return;
+        if (!(event.getTarget() instanceof Player)) return;
+        Player player = (Player) event.getTarget();
         if (cameraPlayers.containsKey(player.getUniqueId())) {
             CameraData data = cameraPlayers.get(player.getUniqueId());
             if (data != null && data.getHitbox() != null && !data.getHitbox().isDead()) {
@@ -475,22 +426,44 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onProjectileLaunch(ProjectileLaunchEvent event) {
-        if (event.getEntity().getShooter() instanceof Player shooter && cameraPlayers.containsKey(shooter.getUniqueId())) {
-            event.setCancelled(true);
+        if (!(event.getEntity().getShooter() instanceof Player)) {
+            return;
+        }
+
+        Player shooter = (Player) event.getEntity().getShooter();
+
+        if (cameraPlayers.containsKey(shooter.getUniqueId())) {
+            event.setCancelled(true); // Generell Projektile verhindern
             shooter.sendMessage(getMessage("no-projectiles"));
         }
     }
 
     @EventHandler
     public void onPlayerInteract(PlayerInteractEvent event) {
-        if (cameraPlayers.containsKey(event.getPlayer().getUniqueId())) {
+        Player player = event.getPlayer();
+        if (player.getGameMode() == GameMode.ADVENTURE) {
+            player.stopSound(SoundCategory.PLAYERS);
+        }
+        if (!cameraPlayers.containsKey(player.getUniqueId())) {
+            return;
+        }
+
+        Action action = event.getAction();
+
+        // Verhindert jegliche Interaktionen im Kamera-Modus
+        if (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK ||
+                action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK ||
+                action == Action.PHYSICAL) {
             event.setCancelled(true);
+            player.stopSound(SoundCategory.PLAYERS);
         }
     }
 
     @EventHandler
     public void onPlayerDamage(EntityDamageEvent event) {
-        if (event.getEntity() instanceof Player && cameraPlayers.containsKey(event.getEntity().getUniqueId()) && !damageImmunityBypass.contains(event.getEntity().getUniqueId())) {
+        if (event.getEntity() instanceof Player &&
+                cameraPlayers.containsKey(event.getEntity().getUniqueId()) &&
+                !damageImmunityBypass.contains(event.getEntity().getUniqueId())) {
             event.setCancelled(true);
         }
     }
@@ -510,14 +483,17 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         Location to = event.getTo();
         if (to == null) return;
 
-        if (to.getBlock().getType() == Material.LAVA) {
+        Block blockAt = to.getBlock();
+        if (blockAt.getType() == Material.LAVA) {
             player.sendMessage(getMessage("cant-fly-in-lava"));
             exitCameraMode(player);
             return;
         }
 
         Location standLoc = cameraPlayers.get(player.getUniqueId()).getArmorStand().getLocation();
-        if (!to.getWorld().equals(standLoc.getWorld()) || (maxDistanceEnabled && to.distanceSquared(standLoc) > maxDistance * maxDistance)) {
+        // Always prevent players from switching worlds, optionally limit distance
+        if (!to.getWorld().equals(standLoc.getWorld()) ||
+                (maxDistanceEnabled && to.distanceSquared(standLoc) > maxDistance * maxDistance)) {
             event.setCancelled(true);
             long now = System.currentTimeMillis();
             if (distanceMessageCooldown.getOrDefault(player.getUniqueId(), 0L) < now) {
@@ -527,14 +503,28 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void suppressAdventureMoveSound(PlayerMoveEvent event) {
+        Player player = event.getPlayer();
+        if (player.getGameMode() == GameMode.ADVENTURE) {
+            player.stopSound(SoundCategory.PLAYERS);
+            player.stopSound(SoundCategory.BLOCKS);
+        }
+    }
+
     @EventHandler
     public void onPlayerDeath(PlayerDeathEvent event) {
+        // Der Spieler soll sterben, aber vorher den Kamera-Modus korrekt beenden.
+        // Die Drops und XP werden vom Tod selbst gehandhabt.
         if (cameraPlayers.containsKey(event.getEntity().getUniqueId())) {
+            // Wichtig: Die Items sind im CameraData gespeichert.
+            // Wir müssen die Drops des Todes-Events leeren und unsere eigenen Items fallen lassen.
             Player player = event.getEntity();
             CameraData data = cameraPlayers.get(player.getUniqueId());
 
-            event.getDrops().clear();
+            event.getDrops().clear(); // Leert die Standard-Drops (leeres Inventar)
 
+            // Füge die gespeicherten Items zu den Drops hinzu
             for (ItemStack item : data.getOriginalInventoryContents()) {
                 if (item != null && item.getType() != Material.AIR) {
                     event.getDrops().add(item);
@@ -545,20 +535,23 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
                     event.getDrops().add(item);
                 }
             }
+
             exitCameraMode(player);
         }
     }
 
     @EventHandler
     public void onVehicleEnter(VehicleEnterEvent event) {
-        if (event.getEntered() instanceof Player && cameraPlayers.containsKey(event.getEntered().getUniqueId())) {
+        if (event.getEntered() instanceof Player &&
+                cameraPlayers.containsKey(event.getEntered().getUniqueId())) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler
     public void onPlayerPickupItem(EntityPickupItemEvent event) {
-        if (event.getEntity() instanceof Player && cameraPlayers.containsKey(event.getEntity().getUniqueId())) {
+        if (event.getEntity() instanceof Player &&
+                cameraPlayers.containsKey(event.getEntity().getUniqueId())) {
             event.setCancelled(true);
         }
     }
@@ -570,14 +563,99 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void filterCommandSuggestions(PlayerCommandSendEvent event) {
+        event.getCommands().removeIf(cmd -> cmd.equalsIgnoreCase("camplugin:cam"));
+    }
+
     @EventHandler
-    public void onInventoryClick(InventoryClickEvent event) {
-        if (event.getWhoClicked() instanceof Player && cameraPlayers.containsKey(event.getWhoClicked().getUniqueId())) {
+    public void onPlayerAttack(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Player &&
+                cameraPlayers.containsKey(event.getDamager().getUniqueId())) {
             event.setCancelled(true);
         }
     }
 
-    // Hilfsmethoden
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void suppressAdventureHitSound(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Player attacker &&
+                attacker.getGameMode() == GameMode.ADVENTURE) {
+            attacker.stopSound(SoundCategory.PLAYERS);
+        }
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (event.getWhoClicked() instanceof Player &&
+                cameraPlayers.containsKey(event.getWhoClicked().getUniqueId())) {
+            event.setCancelled(true);
+        }
+    }
+
+    private void applyDamageWithArmor(Player player, double damage) {
+        if (damage <= 0 || player.isDead()) return;
+        damageImmunityBypass.add(player.getUniqueId());
+        try {
+            player.damage(damage);
+        } finally {
+            // Führe das Entfernen mit einer kleinen Verzögerung aus, um sicherzustellen, dass der Schaden verarbeitet wird
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    damageImmunityBypass.remove(player.getUniqueId());
+                }
+            }.runTaskLater(this, 1L);
+        }
+    }
+
+    /**
+     * Wendet Schaden direkt auf die Lebenspunkte des Spielers an, ohne die Rüstung erneut zu berechnen.
+     * Dies wird verwendet, nachdem der Schaden bereits gegen die Rüstung des ArmorStands berechnet wurde.
+     */
+    private void applyDirectDamage(Player player, double damage) {
+        if (damage <= 0 || player.isDead()) return;
+
+        damageImmunityBypass.add(player.getUniqueId());
+        try {
+            // Rufe das normale Damage-Event auf, damit andere Plugins/Todesmeldungen korrekt funktionieren,
+            // aber stelle sicher, dass wir den exakten Schaden anwenden.
+            double newHealth = Math.max(0.0, player.getHealth() - damage);
+
+            EntityDamageEvent damageEvent = new EntityDamageEvent(player, EntityDamageEvent.DamageCause.CUSTOM, damage);
+            player.setLastDamageCause(damageEvent); // Setzt die Schadensursache
+            player.setHealth(newHealth); // Setzt die Lebenspunkte direkt
+
+        } finally {
+            // Entferne die Immunitäts-Umgehung mit einer kleinen Verzögerung.
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    damageImmunityBypass.remove(player.getUniqueId());
+                }
+            }.runTaskLater(this, 1L);
+        }
+    }
+
+    /**
+     * Copy durability values from the armor stand's equipment back to the
+     * player's original armor items.
+     */
+    private void syncArmorBack(Player player, ArmorStand armorStand, ItemStack[] playerOriginalArmor) {
+        ItemStack[] armorStandArmor = armorStand.getEquipment().getArmorContents();
+        for (int i = 0; i < armorStandArmor.length && i < playerOriginalArmor.length; i++) {
+            ItemStack standItem = armorStandArmor[i];
+            ItemStack playerItem = playerOriginalArmor[i];
+            if (standItem != null && playerItem != null && standItem.getType() == playerItem.getType()) {
+                ItemMeta standMeta = standItem.getItemMeta();
+                ItemMeta playerMeta = playerItem.getItemMeta();
+                if (standMeta instanceof Damageable && playerMeta instanceof Damageable) {
+                    ((Damageable) playerMeta).setDamage(((Damageable) standMeta).getDamage());
+                    playerItem.setItemMeta(playerMeta);
+                }
+            }
+        }
+    }
+
 
     public String getMessage(String path) {
         return ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages." + path, ""));
@@ -603,11 +681,19 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     }
 
     private void addPlayerToNoCollisionTeam(Player player) {
-        Bukkit.getScoreboardManager().getMainScoreboard().getTeam(NO_COLLISION_TEAM).addEntry(player.getName());
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team != null) {
+            team.addEntry(player.getName());
+        }
     }
 
     private void removePlayerFromNoCollisionTeam(Player player) {
-        Bukkit.getScoreboardManager().getMainScoreboard().getTeam(NO_COLLISION_TEAM).removeEntry(player.getName());
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team != null) {
+            team.removeEntry(player.getName());
+        }
     }
 
     public void reloadPlugin(Player initiator) {
@@ -623,9 +709,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         setupNoCollisionTeam();
     }
 
-    /**
-     * Innere Klasse zur Speicherung der Originaldaten eines Spielers im Kameramodus.
-     */
+    // *** CameraData Klasse erweitert ***
     private static class CameraData {
         private final ArmorStand armorStand;
         private final Villager hitbox;
@@ -633,8 +717,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         private final boolean originalAllowFlight;
         private final boolean originalFlying;
         private final boolean originalSilent;
-        private final ItemStack[] originalInventoryContents;
-        private final ItemStack[] originalArmorContents;
+        private final ItemStack[] originalInventoryContents; // Für Inventar
+        private final ItemStack[] originalArmorContents;     // Für Rüstung
 
         public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents) {
             this.armorStand = armorStand;
