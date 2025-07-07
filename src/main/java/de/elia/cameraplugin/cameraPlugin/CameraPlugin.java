@@ -64,7 +64,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private VisibilityMode playerVisibilityMode;
     private boolean allowInvisibilityPotion;
     private Object Sound;
-    private EntityDamageEvent event;
 
     private enum VisibilityMode { CAM, ALL, NONE }
 
@@ -431,104 +430,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     }
 
     // Alternative Methode falls Sie mehr Kontrolle benötigen:
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void onArmorStandDamage(EntityDamageEvent event) {
-        this.event = event;
-        Entity damagedEntity = event.getEntity();
-        UUID ownerUUID = null;
-
-        // Prüfe, ob es sich um unseren ArmorStand oder die zugehörige Hitbox handelt
-        if (damagedEntity instanceof ArmorStand) {
-            ownerUUID = armorStandOwners.get(damagedEntity.getUniqueId());
-        } else if (damagedEntity instanceof Villager) {
-            ownerUUID = hitboxEntities.get(damagedEntity.getUniqueId());
-        }
-
-        if (ownerUUID == null) return; // Nicht von uns verwaltet
-
-        Player owner = Bukkit.getPlayer(ownerUUID);
-        if (owner == null || !owner.isOnline()) {
-            // Spieler offline -> Aufräumen
-            if (damagedEntity instanceof ArmorStand) {
-                armorStandOwners.remove(damagedEntity.getUniqueId());
-            } else {
-                hitboxEntities.remove(damagedEntity.getUniqueId());
-            }
-            cameraPlayers.remove(ownerUUID);
-            damagedEntity.remove();
-            return;
-        }
-
-        if (owner.isDead()) {
-            event.setCancelled(true);
-            exitCameraMode(owner);
-            return;
-        }
-
-        // ArmorStand soll keinen Schaden nehmen
-        event.setCancelled(true);
-
-        // Spieler schlägt seinen eigenen Körper -> Kamera-Modus beenden
-        if (event instanceof EntityDamageByEntityEvent entityEvent) {
-            if (entityEvent.getDamager().getUniqueId().equals(owner.getUniqueId())) {
-                owner.sendMessage(getMessage("camera-off"));
-                exitCameraMode(owner);
-                return;
-            }
-        }
-
-        // Ursprünglicher Schaden (1:1 Übertragung)
-        double originalDamage = event.getDamage();
-
-        // Name des Angreifers bestimmen
-        String damagerName = "Umgebung";
-        Entity damager = null;
-        if (event instanceof EntityDamageByEntityEvent entityEvent) {
-            damager = entityEvent.getDamager();
-            damagerName = damager instanceof Player ? damager.getName() : damager.getType().toString();
-        }
-
-        // Kamera-Modus beenden
-        exitCameraMode(owner);
-
-        // Schaden nach einem Tick auf den Spieler anwenden
-        String finalDamagerName = damagerName;
-        Entity finalDamager = damager;
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                if (owner.isOnline() && !owner.isDead()) {
-                    // Erstelle ein neues Damage-Event für den Spieler mit dem ursprünglichen Schaden
-                    // Das sorgt dafür, dass Minecraft's eigene Schadenberechnung (Rüstung, Verzauberungen) angewendet wird
-                    EntityDamageEvent playerDamageEvent;
-
-                    if (finalDamager != null) {
-                        // Schaden durch Entity
-                        playerDamageEvent = new EntityDamageByEntityEvent(finalDamager, owner,
-                                event.getCause(), originalDamage);
-                    } else {
-                        // Umgebungsschaden
-                        playerDamageEvent = new EntityDamageEvent(owner, event.getCause(), originalDamage);
-                    }
-
-                    // Event aufrufen, damit andere Plugins reagieren können
-                    Bukkit.getPluginManager().callEvent(playerDamageEvent);
-
-                    // Wenn das Event nicht abgebrochen wurde, Schaden anwenden
-                    if (!playerDamageEvent.isCancelled()) {
-                        // Minecraft's eigene Schadenberechnung nutzen
-                        owner.damage(playerDamageEvent.getDamage(), finalDamager);
-                    }
-
-                    String messageKey = event instanceof EntityDamageByEntityEvent ?
-                            "body-attacked" : "body-env-damage";
-                    owner.sendMessage(getMessage(messageKey).replace("{damager}", finalDamagerName));
-                }
-            }
-        }.runTaskLater(CameraPlugin.this, 1L);
-    }
-
-    // Alternative Methode falls Sie mehr Kontrolle benötigen:
     private void applyPlayerDamageWithArmor(Player player, double baseDamage, Entity damager, EntityDamageEvent.DamageCause cause) {
         // Rüstungswerte des Spielers abrufen
         double armorValue = 0;
@@ -656,9 +557,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         player.getInventory().setArmorContents(armor);
     }
 
-    private void applyDirectDamage(Player owner, double reducedDamage) {
-
-    }
 
     @EventHandler(priority = EventPriority.HIGH)
     public void onVillagerInteract(PlayerInteractEntityEvent event) {
