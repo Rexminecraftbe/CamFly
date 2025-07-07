@@ -1,9 +1,6 @@
 package de.elia.cameraplugin.cameraPlugin;
 
-import org.bukkit.Bukkit;
-import org.bukkit.GameMode;
-import org.bukkit.Location;
-import org.bukkit.Material;
+import org.bukkit.*;
 import org.bukkit.entity.*;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -23,10 +20,8 @@ import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.ChatColor;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
-import org.bukkit.SoundCategory;
 import de.elia.cameraplugin.cameraPlugin.CamCommand;
 import de.elia.cameraplugin.cameraPlugin.CamTabCompleter;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -44,6 +39,8 @@ import java.util.List;
 import java.util.Collections;
 import java.util.Collection;
 import java.util.ArrayList;
+
+import static org.bukkit.Sound.ENTITY_ITEM_BREAK;
 
 @SuppressWarnings("removal")
 public final class CameraPlugin extends JavaPlugin implements Listener {
@@ -66,6 +63,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private boolean armorStandGravity;
     private VisibilityMode playerVisibilityMode;
     private boolean allowInvisibilityPotion;
+    private Object Sound;
+    private EntityDamageEvent event;
 
     private enum VisibilityMode { CAM, ALL, NONE }
 
@@ -334,6 +333,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }.runTaskTimer(this, 1L, 1L);
     }
 
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onArmorStandDamage(EntityDamageEvent event) {
         Entity damagedEntity = event.getEntity();
@@ -379,21 +379,14 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             }
         }
 
-        // Ursprünglicher Schaden
+        // Ursprünglicher Schaden (1:1 Übertragung)
         double originalDamage = event.getDamage();
-        ArmorStand armorStand = cameraPlayers.get(ownerUUID).getArmorStand();
-
-        // Schaden basierend auf der Rüstung des ArmorStands neu berechnen
-        // Haltbarkeit der getragenen Rüstung verringern
-        applyArmorDurabilityLoss(armorStand);
-
-        // Schaden unter Berücksichtigung der Rüstung und ihrer Verzauberungen berechnen
-        double reducedDamage = calculateFinalDamage(event, armorStand);
 
         // Name des Angreifers bestimmen
         String damagerName = "Umgebung";
+        Entity damager = null;
         if (event instanceof EntityDamageByEntityEvent entityEvent) {
-            Entity damager = entityEvent.getDamager();
+            damager = entityEvent.getDamager();
             damagerName = damager instanceof Player ? damager.getName() : damager.getType().toString();
         }
 
@@ -402,11 +395,33 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         // Schaden nach einem Tick auf den Spieler anwenden
         String finalDamagerName = damagerName;
+        Entity finalDamager = damager;
         new BukkitRunnable() {
             @Override
             public void run() {
                 if (owner.isOnline() && !owner.isDead()) {
-                    applyDirectDamage(owner, reducedDamage);
+                    // Erstelle ein neues Damage-Event für den Spieler mit dem ursprünglichen Schaden
+                    // Das sorgt dafür, dass Minecraft's eigene Schadenberechnung (Rüstung, Verzauberungen) angewendet wird
+                    EntityDamageEvent playerDamageEvent;
+
+                    if (finalDamager != null) {
+                        // Schaden durch Entity
+                        playerDamageEvent = new EntityDamageByEntityEvent(finalDamager, owner,
+                                event.getCause(), originalDamage);
+                    } else {
+                        // Umgebungsschaden
+                        playerDamageEvent = new EntityDamageEvent(owner, event.getCause(), originalDamage);
+                    }
+
+                    // Event aufrufen, damit andere Plugins reagieren können
+                    Bukkit.getPluginManager().callEvent(playerDamageEvent);
+
+                    // Wenn das Event nicht abgebrochen wurde, Schaden anwenden
+                    if (!playerDamageEvent.isCancelled()) {
+                        // Minecraft's eigene Schadenberechnung nutzen
+                        owner.damage(playerDamageEvent.getDamage(), finalDamager);
+                    }
+
                     String messageKey = event instanceof EntityDamageByEntityEvent ?
                             "body-attacked" : "body-env-damage";
                     owner.sendMessage(getMessage(messageKey).replace("{damager}", finalDamagerName));
@@ -415,7 +430,234 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }.runTaskLater(CameraPlugin.this, 1L);
     }
 
+    // Alternative Methode falls Sie mehr Kontrolle benötigen:
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onArmorStandDamage(EntityDamageEvent event) {
+        this.event = event;
+        Entity damagedEntity = event.getEntity();
+        UUID ownerUUID = null;
+
+        // Prüfe, ob es sich um unseren ArmorStand oder die zugehörige Hitbox handelt
+        if (damagedEntity instanceof ArmorStand) {
+            ownerUUID = armorStandOwners.get(damagedEntity.getUniqueId());
+        } else if (damagedEntity instanceof Villager) {
+            ownerUUID = hitboxEntities.get(damagedEntity.getUniqueId());
+        }
+
+        if (ownerUUID == null) return; // Nicht von uns verwaltet
+
+        Player owner = Bukkit.getPlayer(ownerUUID);
+        if (owner == null || !owner.isOnline()) {
+            // Spieler offline -> Aufräumen
+            if (damagedEntity instanceof ArmorStand) {
+                armorStandOwners.remove(damagedEntity.getUniqueId());
+            } else {
+                hitboxEntities.remove(damagedEntity.getUniqueId());
+            }
+            cameraPlayers.remove(ownerUUID);
+            damagedEntity.remove();
+            return;
+        }
+
+        if (owner.isDead()) {
+            event.setCancelled(true);
+            exitCameraMode(owner);
+            return;
+        }
+
+        // ArmorStand soll keinen Schaden nehmen
+        event.setCancelled(true);
+
+        // Spieler schlägt seinen eigenen Körper -> Kamera-Modus beenden
+        if (event instanceof EntityDamageByEntityEvent entityEvent) {
+            if (entityEvent.getDamager().getUniqueId().equals(owner.getUniqueId())) {
+                owner.sendMessage(getMessage("camera-off"));
+                exitCameraMode(owner);
+                return;
+            }
+        }
+
+        // Ursprünglicher Schaden (1:1 Übertragung)
+        double originalDamage = event.getDamage();
+
+        // Name des Angreifers bestimmen
+        String damagerName = "Umgebung";
+        Entity damager = null;
+        if (event instanceof EntityDamageByEntityEvent entityEvent) {
+            damager = entityEvent.getDamager();
+            damagerName = damager instanceof Player ? damager.getName() : damager.getType().toString();
+        }
+
+        // Kamera-Modus beenden
+        exitCameraMode(owner);
+
+        // Schaden nach einem Tick auf den Spieler anwenden
+        String finalDamagerName = damagerName;
+        Entity finalDamager = damager;
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (owner.isOnline() && !owner.isDead()) {
+                    // Erstelle ein neues Damage-Event für den Spieler mit dem ursprünglichen Schaden
+                    // Das sorgt dafür, dass Minecraft's eigene Schadenberechnung (Rüstung, Verzauberungen) angewendet wird
+                    EntityDamageEvent playerDamageEvent;
+
+                    if (finalDamager != null) {
+                        // Schaden durch Entity
+                        playerDamageEvent = new EntityDamageByEntityEvent(finalDamager, owner,
+                                event.getCause(), originalDamage);
+                    } else {
+                        // Umgebungsschaden
+                        playerDamageEvent = new EntityDamageEvent(owner, event.getCause(), originalDamage);
+                    }
+
+                    // Event aufrufen, damit andere Plugins reagieren können
+                    Bukkit.getPluginManager().callEvent(playerDamageEvent);
+
+                    // Wenn das Event nicht abgebrochen wurde, Schaden anwenden
+                    if (!playerDamageEvent.isCancelled()) {
+                        // Minecraft's eigene Schadenberechnung nutzen
+                        owner.damage(playerDamageEvent.getDamage(), finalDamager);
+                    }
+
+                    String messageKey = event instanceof EntityDamageByEntityEvent ?
+                            "body-attacked" : "body-env-damage";
+                    owner.sendMessage(getMessage(messageKey).replace("{damager}", finalDamagerName));
+                }
+            }
+        }.runTaskLater(CameraPlugin.this, 1L);
+    }
+
+    // Alternative Methode falls Sie mehr Kontrolle benötigen:
+    private void applyPlayerDamageWithArmor(Player player, double baseDamage, Entity damager, EntityDamageEvent.DamageCause cause) {
+        // Rüstungswerte des Spielers abrufen
+        double armorValue = 0;
+        double armorToughness = 0;
+
+        ItemStack[] armor = player.getInventory().getArmorContents();
+        for (ItemStack piece : armor) {
+            if (piece != null && piece.getType() != Material.AIR) {
+                // Rüstungswerte basierend auf Material
+                armorValue += getArmorValue(piece);
+                armorToughness += getArmorToughness(piece);
+
+                // Verzauberungen berücksichtigen
+                if (piece.containsEnchantment(Enchantment.PROTECTION)) {
+                    // Protection reduziert Schaden um 4% pro Level
+                    int protLevel = piece.getEnchantmentLevel(Enchantment.PROTECTION);
+                    baseDamage *= (1 - (protLevel * 0.04));
+                }
+
+                // Spezifische Schutz-Verzauberungen je nach Schadenstyp
+                if (cause == EntityDamageEvent.DamageCause.PROJECTILE &&
+                        piece.containsEnchantment(Enchantment.PROJECTILE_PROTECTION)) {
+                    int protLevel = piece.getEnchantmentLevel(Enchantment.PROJECTILE_PROTECTION);
+                    baseDamage *= (1 - (protLevel * 0.08));
+                }
+                // Weitere Schutz-Verzauberungen hier hinzufügen...
+            }
+        }
+
+        // Rüstungsreduktion berechnen (vereinfachte Minecraft-Formel)
+        double damageReduction = Math.min(20, Math.max(armorValue / 5, armorValue - baseDamage / (2 + armorToughness / 4)));
+        double finalDamage = baseDamage * (1 - damageReduction / 25);
+
+        // Waffen-Verzauberungen des Angreifers berücksichtigen
+        if (damager instanceof Player attackerPlayer) {
+            ItemStack weapon = attackerPlayer.getInventory().getItemInMainHand();
+            if (weapon != null && weapon.containsEnchantment(Enchantment.SHARPNESS)) {
+                int sharpnessLevel = weapon.getEnchantmentLevel(Enchantment.SHARPNESS);
+                finalDamage += 0.5 * sharpnessLevel + 0.5; // Sharpness-Bonus
+            }
+            // Weitere Waffen-Verzauberungen hier hinzufügen...
+        }
+
+        // Schaden anwenden
+        player.damage(finalDamage, damager);
+
+        // Rüstungs-Haltbarkeit reduzieren
+        damageArmor(player, (int) Math.ceil(finalDamage));
+    }
+
+    private double getArmorValue(ItemStack armor) {
+        Material material = armor.getType();
+        switch (material) {
+            case LEATHER_HELMET: return 1;
+            case LEATHER_CHESTPLATE: return 3;
+            case LEATHER_LEGGINGS: return 2;
+            case LEATHER_BOOTS: return 1;
+
+            case CHAINMAIL_HELMET: return 2;
+            case CHAINMAIL_CHESTPLATE: return 5;
+            case CHAINMAIL_LEGGINGS: return 4;
+            case CHAINMAIL_BOOTS: return 1;
+
+            case IRON_HELMET: return 2;
+            case IRON_CHESTPLATE: return 6;
+            case IRON_LEGGINGS: return 5;
+            case IRON_BOOTS: return 2;
+
+            case DIAMOND_HELMET: return 3;
+            case DIAMOND_CHESTPLATE: return 8;
+            case DIAMOND_LEGGINGS: return 6;
+            case DIAMOND_BOOTS: return 3;
+
+            case NETHERITE_HELMET: return 3;
+            case NETHERITE_CHESTPLATE: return 8;
+            case NETHERITE_LEGGINGS: return 6;
+            case NETHERITE_BOOTS: return 3;
+
+            default: return 0;
+        }
+    }
+
+    private double getArmorToughness(ItemStack armor) {
+        Material material = armor.getType();
+        if (material.name().startsWith("NETHERITE_")) {
+            return 3; // Netherite hat +3 Toughness
+        } else if (material.name().startsWith("DIAMOND_")) {
+            return 2; // Diamond hat +2 Toughness
+        }
+        return 0;
+    }
+
+    private void damageArmor(Player player, int damage) {
+        ItemStack[] armor = player.getInventory().getArmorContents();
+        for (int i = 0; i < armor.length; i++) {
+            ItemStack piece = armor[i];
+            if (piece != null && piece.getType() != Material.AIR) {
+                // Unbreaking-Verzauberung berücksichtigen
+                int unbreakingLevel = piece.getEnchantmentLevel(Enchantment.UNBREAKING);
+                boolean shouldDamage = true;
+
+                if (unbreakingLevel > 0) {
+                    // Chance dass Item nicht beschädigt wird
+                    double chance = 1.0 / (unbreakingLevel + 1);
+                    shouldDamage = Math.random() < chance;
+                }
+
+                if (shouldDamage) {
+                    ItemMeta meta = piece.getItemMeta();
+                    if (meta instanceof Damageable) {
+                        Damageable damageable = (Damageable) meta;
+                        damageable.setDamage(damageable.getDamage() + 1);
+
+                        // Prüfen ob Item kaputt ist
+                        if (damageable.getDamage() >= piece.getType().getMaxDurability()) {
+                            armor[i] = null; // Item zerstören
+                            player.playSound(player.getLocation(), ENTITY_ITEM_BREAK, 1.0f, 1.0f);
+                        } else {
+                            piece.setItemMeta(meta);
+                        }
+                    }
+                }
+            }
+        }
+        player.getInventory().setArmorContents(armor);
+    }
+
     private void applyDirectDamage(Player owner, double reducedDamage) {
+
     }
 
     @EventHandler(priority = EventPriority.HIGH)
