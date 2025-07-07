@@ -20,6 +20,7 @@ import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.ChatColor;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import de.elia.cameraplugin.cameraPlugin.CamCommand;
@@ -50,6 +51,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private final Set<UUID> damageImmunityBypass = new HashSet<>();
     private final Map<UUID, UUID> armorStandOwners = new HashMap<>();
     private final Map<UUID, UUID> hitboxEntities = new HashMap<>();
+    private final Set<UUID> pendingDamage = new HashSet<>();
 
     private static final String NO_COLLISION_TEAM = "cam_no_push";
 
@@ -360,71 +362,54 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        if (owner.isDead()) {
-            event.setCancelled(true);
-            exitCameraMode(owner);
+        if (!pendingDamage.add(ownerUUID)) {
+            // already scheduled damage for this hit
             return;
         }
 
-        // ArmorStand soll keinen Schaden nehmen
-        event.setCancelled(true);
-
-        // Spieler schlägt seinen eigenen Körper -> Kamera-Modus beenden
-        if (event instanceof EntityDamageByEntityEvent entityEvent) {
-            if (entityEvent.getDamager().getUniqueId().equals(owner.getUniqueId())) {
-                owner.sendMessage(getMessage("camera-off"));
-                exitCameraMode(owner);
-                return;
-            }
+        if (owner.isDead()) {
+            event.setCancelled(true);
+            exitCameraMode(owner);
+            pendingDamage.remove(ownerUUID);
+            return;
         }
 
-        // Ursprünglicher Schaden (1:1 Übertragung)
-        double originalDamage = event.getDamage();
+        // ArmorStand soll keinen Schaden nehmen, Haltbarkeit manuell berechnen
+        event.setCancelled(true);
 
-        // Name des Angreifers bestimmen
+        if (event instanceof EntityDamageByEntityEvent selfHit &&
+                selfHit.getDamager().getUniqueId().equals(owner.getUniqueId())) {
+            owner.sendMessage(getMessage("camera-off"));
+            exitCameraMode(owner);
+            pendingDamage.remove(ownerUUID);
+            return;
+        }
+
+        ArmorStand armorStand = cameraPlayers.get(ownerUUID).getArmorStand();
+        applyArmorDurabilityLoss(armorStand);
+        double reducedDamage = calculateFinalDamage(event, armorStand);
+
         String damagerName = "Umgebung";
-        Entity damager = null;
         if (event instanceof EntityDamageByEntityEvent entityEvent) {
-            damager = entityEvent.getDamager();
+            Entity damager = entityEvent.getDamager();
             damagerName = damager instanceof Player ? damager.getName() : damager.getType().toString();
         }
 
-        // Kamera-Modus beenden
         exitCameraMode(owner);
 
-        // Schaden nach einem Tick auf den Spieler anwenden
         String finalDamagerName = damagerName;
-        Entity finalDamager = damager;
+        double finalDamage = reducedDamage;
+        UUID targetUUID = ownerUUID;
         new BukkitRunnable() {
             @Override
             public void run() {
                 if (owner.isOnline() && !owner.isDead()) {
-                    // Erstelle ein neues Damage-Event für den Spieler mit dem ursprünglichen Schaden
-                    // Das sorgt dafür, dass Minecraft's eigene Schadenberechnung (Rüstung, Verzauberungen) angewendet wird
-                    EntityDamageEvent playerDamageEvent;
-
-                    if (finalDamager != null) {
-                        // Schaden durch Entity
-                        playerDamageEvent = new EntityDamageByEntityEvent(finalDamager, owner,
-                                event.getCause(), originalDamage);
-                    } else {
-                        // Umgebungsschaden
-                        playerDamageEvent = new EntityDamageEvent(owner, event.getCause(), originalDamage);
-                    }
-
-                    // Event aufrufen, damit andere Plugins reagieren können
-                    Bukkit.getPluginManager().callEvent(playerDamageEvent);
-
-                    // Wenn das Event nicht abgebrochen wurde, Schaden anwenden
-                    if (!playerDamageEvent.isCancelled()) {
-                        // Minecraft's eigene Schadenberechnung nutzen
-                        owner.damage(playerDamageEvent.getDamage(), finalDamager);
-                    }
-
+                    applyDirectDamage(owner, finalDamage);
                     String messageKey = event instanceof EntityDamageByEntityEvent ?
                             "body-attacked" : "body-env-damage";
                     owner.sendMessage(getMessage(messageKey).replace("{damager}", finalDamagerName));
                 }
+                pendingDamage.remove(targetUUID);
             }
         }.runTaskLater(CameraPlugin.this, 1L);
     }
@@ -806,6 +791,27 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             player.damage(damage);
         } finally {
             // Führe das Entfernen mit einer kleinen Verzögerung aus, um sicherzustellen, dass der Schaden verarbeitet wird
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    damageImmunityBypass.remove(player.getUniqueId());
+                }
+            }.runTaskLater(this, 1L);
+        }
+    }
+
+    private void applyDirectDamage(Player player, double damage) {
+        if (damage <= 0 || player.isDead()) return;
+
+        damageImmunityBypass.add(player.getUniqueId());
+        try {
+            double newHealth = Math.max(0, player.getHealth() - damage);
+            player.setHealth(newHealth);
+
+            EntityDamageEvent damageEvent = new EntityDamageEvent(player, EntityDamageEvent.DamageCause.CUSTOM, damage);
+            damageEvent.setDamage(EntityDamageEvent.DamageModifier.BASE, damage);
+            player.setLastDamageCause(damageEvent);
+        } finally {
             new BukkitRunnable() {
                 @Override
                 public void run() {
