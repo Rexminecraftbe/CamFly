@@ -4,6 +4,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.*;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -20,19 +21,18 @@ import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.Damageable;
-import org.bukkit.enchantments.Enchantment;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.ChatColor;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.SoundCategory;
-import de.elia.cameraplugin.cameraPlugin.CamCommand;
-import de.elia.cameraplugin.cameraPlugin.CamTabCompleter;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.block.Block;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
+import org.bukkit.entity.ArmorStand;
+
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -40,8 +40,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.List;
-import java.util.Collections;
 import java.util.Collection;
 import java.util.ArrayList;
 
@@ -750,31 +748,81 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         int level;
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_ENVIRONMENTAL);
+        level = item.getEnchantmentLevel(Enchantment.PROTECTION);
         if (level > 0) epf += level;
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_FIRE);
+        level = item.getEnchantmentLevel(Enchantment.FIRE_PROTECTION);
         if (level > 0 && (cause == DamageCause.LAVA || cause == DamageCause.FIRE || cause == DamageCause.HOT_FLOOR || cause == DamageCause.FIRE_TICK)) {
             epf += level * 2;
         }
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_EXPLOSIONS);
+        level = item.getEnchantmentLevel(Enchantment.BLAST_PROTECTION);
         if (level > 0 && (cause == DamageCause.ENTITY_EXPLOSION || cause == DamageCause.BLOCK_EXPLOSION)) {
             epf += level * 2;
         }
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_PROJECTILE);
+        level = item.getEnchantmentLevel(Enchantment.PROJECTILE_PROTECTION);
         if (level > 0 && cause == DamageCause.PROJECTILE) {
             epf += level * 2;
         }
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_FALL);
+        level = item.getEnchantmentLevel(Enchantment.FEATHER_FALLING);
         if (level > 0 && cause == DamageCause.FALL) {
             epf += level * 3;
         }
 
         return epf;
     }
+
+    /**
+     * Wendet Haltbarkeitsschaden auf die Rüstung an und berücksichtigt dabei
+     * die Unbreaking-Verzauberung.
+     */
+    private void applyArmorDurabilityLoss(ArmorStand stand) {
+        for (ItemStack item : stand.getEquipment().getArmorContents()) {
+            if (item == null) continue;
+            ItemMeta meta = item.getItemMeta();
+            if (!(meta instanceof Damageable damageable)) continue;
+
+            // Since Spigot 1.21 the unbreaking enchantment constant was renamed
+            // from DURABILITY to UNBREAKING. Use the new name so it resolves
+            // correctly when compiling against the latest API.
+            int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
+            double chanceNoDamage = switch (unbreaking) {
+                case 0 -> 0.0;
+                case 1 -> 0.5;
+                case 2 -> 2.0 / 3.0;
+                default -> 0.75; // Level 3 or higher
+            };
+
+            if (Math.random() >= chanceNoDamage) {
+                damageable.setDamage(damageable.getDamage() + 1);
+                item.setItemMeta(damageable);
+            }
+        }
+    }
+
+    private void applyArmorDurabilityLoss(ArmorStand stand) {
+        for (ItemStack item : stand.getEquipment().getArmorContents()) {
+            if (item == null) continue;
+            ItemMeta meta = item.getItemMeta();
+            if (!(meta instanceof Damageable damageable)) continue;
+
+            int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
+            double chanceNoDamage = switch (unbreaking) {
+                case 0 -> 0.0;
+                case 1 -> 0.5;
+                case 2 -> 2.0 / 3.0;
+                default -> 0.75; // Level 3 or higher
+            };
+
+            if (Math.random() >= chanceNoDamage) {
+                damageable.setDamage(damageable.getDamage() + 1);
+                item.setItemMeta(damageable);
+            }
+        }
+    }
+
 
     /**
      * Wendet Haltbarkeitsschaden auf die Rüstung an und berücksichtigt dabei
