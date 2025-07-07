@@ -750,25 +750,25 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         int level;
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_ENVIRONMENTAL);
+        level = item.getEnchantmentLevel(Enchantment.PROTECTION);
         if (level > 0) epf += level;
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_FIRE);
+        level = item.getEnchantmentLevel(Enchantment.FIRE_PROTECTION);
         if (level > 0 && (cause == DamageCause.LAVA || cause == DamageCause.FIRE || cause == DamageCause.HOT_FLOOR || cause == DamageCause.FIRE_TICK)) {
             epf += level * 2;
         }
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_EXPLOSIONS);
+        level = item.getEnchantmentLevel(Enchantment.BLAST_PROTECTION);
         if (level > 0 && (cause == DamageCause.ENTITY_EXPLOSION || cause == DamageCause.BLOCK_EXPLOSION)) {
             epf += level * 2;
         }
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_PROJECTILE);
+        level = item.getEnchantmentLevel(Enchantment.PROJECTILE_PROTECTION);
         if (level > 0 && cause == DamageCause.PROJECTILE) {
             epf += level * 2;
         }
 
-        level = item.getEnchantmentLevel(Enchantment.PROTECTION_FALL);
+        level = item.getEnchantmentLevel(Enchantment.FEATHER_FALLING);
         if (level > 0 && cause == DamageCause.FALL) {
             epf += level * 3;
         }
@@ -786,7 +786,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             ItemMeta meta = item.getItemMeta();
             if (!(meta instanceof Damageable damageable)) continue;
 
-            int unbreaking = item.getEnchantmentLevel(Enchantment.DURABILITY);
+            int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
             double chanceNoDamage = switch (unbreaking) {
                 case 0 -> 0.0;
                 case 1 -> 0.5;
