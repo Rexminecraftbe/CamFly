@@ -32,6 +32,8 @@ import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.entity.AbstractArrow;
 import org.bukkit.entity.Arrow;
 import org.bukkit.entity.SpectralArrow;
+import org.bukkit.entity.Projectile;
+import de.example.damagecalculator.PreciseDamageCalculator;
 import org.bukkit.scoreboard.Team;
 import org.bukkit.potion.PotionData;
 
@@ -392,12 +394,33 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
         ArmorStand armorStand = cameraPlayers.get(ownerUUID).getArmorStand();
         applyArmorDurabilityLoss(armorStand);
-        double reducedDamage = calculateFinalDamage(event, armorStand);
 
-        // Apply projectile effects such as tipped arrow potions and tweak melee
+        double reducedDamage;
         if (event instanceof EntityDamageByEntityEvent hitEvent) {
-            applyProjectileEffects(hitEvent.getDamager(), owner);
-            reducedDamage = adjustMeleeDamage(hitEvent, reducedDamage);
+            Entity damager = hitEvent.getDamager();
+            Player attacker = null;
+            ItemStack weapon = null;
+            boolean fullyCharged = true;
+
+            if (damager instanceof Player p) {
+                attacker = p;
+                weapon = p.getInventory().getItemInMainHand();
+                fullyCharged = true;
+            } else if (damager instanceof Projectile projectile && projectile.getShooter() instanceof Player p) {
+                attacker = p;
+                weapon = getProjectileWeapon(p);
+                fullyCharged = true;
+                applyProjectileEffects(projectile, owner);
+            }
+
+            if (attacker != null) {
+                reducedDamage = PreciseDamageCalculator.calculateDamage(attacker, armorStand, weapon,
+                        attacker.getFallDistance(), fullyCharged);
+            } else {
+                reducedDamage = calculateFinalDamage(event, armorStand);
+            }
+        } else {
+            reducedDamage = calculateFinalDamage(event, armorStand);
         }
 
 
@@ -866,6 +889,18 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         projectile.remove();
+    }
+
+    private ItemStack getProjectileWeapon(Player shooter) {
+        ItemStack mainHand = shooter.getInventory().getItemInMainHand();
+        ItemStack offHand = shooter.getInventory().getItemInOffHand();
+        if (mainHand.getType() == Material.BOW || mainHand.getType() == Material.CROSSBOW) {
+            return mainHand;
+        }
+        if (offHand.getType() == Material.BOW || offHand.getType() == Material.CROSSBOW) {
+            return offHand;
+        }
+        return mainHand;
     }
 
     /**
