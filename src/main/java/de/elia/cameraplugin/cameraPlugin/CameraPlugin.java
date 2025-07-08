@@ -931,24 +931,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
      */
     private double calculateFinalDamage(EntityDamageEvent baseEvent, ArmorStand armorStand) {
         double damageAfterArmor = calculateArmorReducedDamage(baseEvent.getDamage(), armorStand);
-        double adjustedDamage = baseEvent.getDamage();
-
-        if (baseEvent instanceof EntityDamageByEntityEvent entityEvent
-                && entityEvent.getDamager() instanceof Player attacker) {
-            ItemStack weapon = attacker.getInventory().getItemInMainHand();
-            double baseWeapon = getWeaponBaseDamage(weapon.getType());
-            int sharp = weapon.getEnchantmentLevel(Enchantment.SHARPNESS);
-            double enchant = sharp > 0 ? 0.5 * sharp + 0.5 : 0.0;
-
-            double attackStrength = (adjustedDamage - enchant) / (baseWeapon + 1.0);
-            adjustedDamage = baseWeapon * attackStrength + enchant;
-        } else if (baseEvent.getCause() == DamageCause.ENTITY_ATTACK
-                || baseEvent.getCause() == DamageCause.ENTITY_SWEEP_ATTACK) {
-            // remove player base damage when attacker is unknown
-            adjustedDamage = Math.max(0.0, adjustedDamage - 1.0);
-        }
-
-        double damageAfterArmor = calculateArmorReducedDamage(adjustedDamage, armorStand);
 
         int epf = 0;
         DamageCause cause = baseEvent.getCause();
@@ -1259,21 +1241,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
             updateViewerTeam(online);
         }
     }
-
-    private double getWeaponBaseDamage(Material material) {
-        return switch (material) {
-            case WOODEN_SWORD, GOLDEN_SWORD -> 4;
-            case STONE_SWORD -> 5;
-            case IRON_SWORD -> 6;
-            case DIAMOND_SWORD -> 7;
-            case NETHERITE_SWORD -> 8;
-            case WOODEN_AXE, GOLDEN_AXE -> 7;
-            case STONE_AXE, IRON_AXE, DIAMOND_AXE -> 9;
-            case NETHERITE_AXE -> 10;
-            default -> 1; // fist or unknown
-        };
-    }
-
 
     // *** CameraData Klasse erweitert ***
     private static class CameraData {
