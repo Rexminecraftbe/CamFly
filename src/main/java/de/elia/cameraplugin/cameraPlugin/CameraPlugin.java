@@ -21,6 +21,7 @@ import org.bukkit.enchantments.Enchantment;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.ChatColor;
+import org.bukkit.potion.PotionData;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import de.elia.cameraplugin.cameraPlugin.CamCommand;
@@ -28,7 +29,11 @@ import de.elia.cameraplugin.cameraPlugin.CamTabCompleter;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.block.Block;
 import org.bukkit.scoreboard.Scoreboard;
+import org.bukkit.entity.AbstractArrow;
+import org.bukkit.entity.Arrow;
+import org.bukkit.entity.SpectralArrow;
 import org.bukkit.scoreboard.Team;
+import org.bukkit.potion.PotionData;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -388,6 +393,13 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         ArmorStand armorStand = cameraPlayers.get(ownerUUID).getArmorStand();
         applyArmorDurabilityLoss(armorStand);
         double reducedDamage = calculateFinalDamage(event, armorStand);
+
+        // Apply projectile effects such as tipped arrow potions and tweak melee
+        if (event instanceof EntityDamageByEntityEvent hitEvent) {
+            applyProjectileEffects(hitEvent.getDamager(), owner);
+            reducedDamage = adjustMeleeDamage(hitEvent, reducedDamage);
+        }
+
 
         String damagerName = "Umgebung";
         if (event instanceof EntityDamageByEntityEvent entityEvent) {
@@ -800,6 +812,8 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
+
+
     private void applyDirectDamage(Player player, double damage) {
         if (damage <= 0 || player.isDead()) return;
 
@@ -819,6 +833,39 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
                 }
             }.runTaskLater(this, 1L);
         }
+    }
+
+
+    /**
+     * Apply potion and special effects from a projectile to the player when
+     * the projectile hits the armor stand. This covers tipped and spectral
+     * arrows so that the player receives the same effects.
+     */
+    private void applyProjectileEffects(Entity projectile, Player target) {
+        if (!(projectile instanceof AbstractArrow arrow)) return;
+
+        if (projectile instanceof SpectralArrow) {
+            target.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, 200, 0));
+        }
+
+        if (projectile instanceof Arrow tipped) {
+            for (PotionEffect effect : tipped.getCustomEffects()) {
+                target.addPotionEffect(effect);
+            }
+
+            PotionData data = tipped.getBasePotionData();
+            PotionEffectType type = data.getType().getEffectType();
+            if (type != null && type != PotionEffectType.INSTANT_HEALTH && type != PotionEffectType.INSTANT_DAMAGE) {
+                int duration = 160;
+                int amplifier = data.isUpgraded() ? 1 : 0;
+                if (data.isExtended()) {
+                    duration *= 2;
+                }
+                target.addPotionEffect(new PotionEffect(type, duration, amplifier));
+            }
+        }
+
+        projectile.remove();
     }
 
     /**
@@ -927,6 +974,104 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         return epf;
+    }
+
+    /**
+     * Adjust melee damage to better match vanilla behaviour. This compensates
+     * for known inaccuracies when swords and maces hit the armor stand.
+     */
+    private double adjustMeleeDamage(EntityDamageByEntityEvent event, double damage) {
+        Entity damager = event.getDamager();
+        if (!(damager instanceof Player attacker)) return damage;
+
+        ItemStack weapon = attacker.getInventory().getItemInMainHand();
+        Material type = weapon.getType();
+        double eventBase = event.getDamage();
+        double correctBase = eventBase;
+
+        if (type.name().endsWith("_SWORD")) {
+            // Fix sword damage calculation
+            int sharp = weapon.getEnchantmentLevel(Enchantment.SHARPNESS);
+            double base = switch (type) {
+                case WOODEN_SWORD, GOLDEN_SWORD -> 4.0;
+                case STONE_SWORD -> 5.0;
+                case IRON_SWORD -> 6.0;
+                case DIAMOND_SWORD -> 7.0;
+                case NETHERITE_SWORD -> 8.0;
+                default -> eventBase;
+            };
+
+            // Apply sharpness first (before critical hit multiplier)
+            if (sharp > 0) {
+                base += 1.0 + 0.5 * (sharp - 1);
+            }
+
+            // Critical hit multiplies the total damage (base + sharpness)
+            boolean critical = attacker.getFallDistance() > 0 && !attacker.isOnGround();
+            if (critical) {
+                base *= 1.5;
+            }
+
+            correctBase = base;
+
+        } else if (type == Material.MACE) {
+            // Fix mace damage calculation according to wiki
+            boolean airborne = attacker.getFallDistance() > 0 && !attacker.isOnGround();
+            double fallBlocks = Math.floor(attacker.getFallDistance());
+
+            // Base damage: 7 for normal attack, 10.5 for critical (airborne)
+            double base = airborne ? 10.5 : 7.0;
+
+            // Only calculate fall damage if airborne and fell at least 1.5 blocks
+            if (airborne && attacker.getFallDistance() >= 1.5) {
+                // Fall damage calculation according to wiki:
+                // First 3 blocks: 4 damage each
+                // Next 5 blocks: 2 damage each
+                // Remaining blocks: 1 damage each
+                double fallDamage = 0.0;
+
+                if (fallBlocks >= 1) {
+                    // First 3 blocks (or less if fall is shorter)
+                    double firstBlocks = Math.min(fallBlocks, 3);
+                    fallDamage += firstBlocks * 4.0;
+
+                    if (fallBlocks > 3) {
+                        // Next 5 blocks (blocks 4-8)
+                        double middleBlocks = Math.min(fallBlocks - 3, 5);
+                        fallDamage += middleBlocks * 2.0;
+
+                        if (fallBlocks > 8) {
+                            // Remaining blocks (9+)
+                            double remainingBlocks = fallBlocks - 8;
+                            fallDamage += remainingBlocks * 1.0;
+                        }
+                    }
+                }
+
+                // Apply Density enchantment (adds 0.5 damage per level per block)
+                int density = weapon.getEnchantmentLevel(Enchantment.DENSITY);
+                if (density > 0) {
+                    fallDamage += fallBlocks * density * 0.5;
+                }
+
+                // Critical hit increases fall damage by 50%
+                if (airborne) {
+                    fallDamage *= 1.5;
+                }
+
+                base += fallDamage;
+            }
+
+            // Apply Breach enchantment (adds 1 damage per level)
+            int breach = weapon.getEnchantmentLevel(Enchantment.BREACH);
+            if (breach > 0) {
+                base += breach;
+            }
+
+            correctBase = base;
+        }
+
+        return Math.max(0.0, damage + (correctBase - eventBase));
     }
 
     /**
