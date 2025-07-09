@@ -621,55 +621,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
-
-
-                // Remaining blocks: 1 damage each
-                double fallDamage = 0.0;
-
-                if (fallBlocks >= 1) {
-                    // First 3 blocks (or less if fall is shorter)
-                    double firstBlocks = Math.min(fallBlocks, 3);
-                    fallDamage += firstBlocks * 4.0;
-
-                    if (fallBlocks > 3) {
-                        // Next 5 blocks (blocks 4-8)
-                        double middleBlocks = Math.min(fallBlocks - 3, 5);
-                        fallDamage += middleBlocks * 2.0;
-
-                        if (fallBlocks > 8) {
-                            // Remaining blocks (9+)
-                            double remainingBlocks = fallBlocks - 8;
-                            fallDamage += remainingBlocks * 1.0;
-                        }
-                    }
-                }
-
-                // Apply Density enchantment (adds 0.5 damage per level per block)
-                int density = weapon.getEnchantmentLevel(Enchantment.DENSITY);
-                if (density > 0) {
-                    fallDamage += fallBlocks * density * 0.5;
-                }
-
-                // Critical hit increases fall damage by 50%
-                if (airborne) {
-                    fallDamage *= 1.5;
-                }
-
-                base += fallDamage;
-            }
-
-            // Apply Breach enchantment (adds 1 damage per level)
-            int breach = weapon.getEnchantmentLevel(Enchantment.BREACH);
-            if (breach > 0) {
-                base += breach;
-            }
-
-            correctBase = base;
-        }
-
-        return Math.max(0.0, damage + (correctBase - eventBase));
-    }
-
     /**
      * Wendet Haltbarkeitsschaden auf die Rüstung an und berücksichtigt dabei
      * die Unbreaking-Verzauberung.
@@ -871,5 +822,7 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         public boolean getOriginalAllowFlight() { return originalAllowFlight; }
         public boolean getOriginalFlying() { return originalFlying; }
         public boolean getOriginalSilent() { return originalSilent; }
-        public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }
-        public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
+        public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }        public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
+        public Collection<PotionEffect> getPausedEffects() { return pausedEffects; }
+    }
+}
