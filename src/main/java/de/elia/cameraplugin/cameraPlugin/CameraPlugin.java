@@ -32,7 +32,6 @@ import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.entity.AbstractArrow;
 import org.bukkit.entity.Arrow;
 import org.bukkit.entity.SpectralArrow;
-import org.bukkit.entity.Projectile;
 import org.bukkit.scoreboard.Team;
 import org.bukkit.potion.PotionData;
 
@@ -69,9 +68,6 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private boolean armorStandNameVisible;
     private boolean armorStandVisible;
     private boolean armorStandGravity;
-    private double armorStandDamageAmount;
-    private boolean armorDurabilityLoss;
-    private boolean damageIgnoreArmor;
     private VisibilityMode playerVisibilityMode;
     private boolean allowInvisibilityPotion;
     private Object Sound;
@@ -349,18 +345,213 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         Entity damagedEntity = event.getEntity();
         UUID ownerUUID = null;
 
+        // Prüfe, ob es sich um unseren ArmorStand oder die zugehörige Hitbox handelt
         if (damagedEntity instanceof ArmorStand) {
             ownerUUID = armorStandOwners.get(damagedEntity.getUniqueId());
         } else if (damagedEntity instanceof Villager) {
             ownerUUID = hitboxEntities.get(damagedEntity.getUniqueId());
         }
 
-        if (ownerUUID == null) {
+        if (ownerUUID == null) return; // Nicht von uns verwaltet
+
+        Player owner = Bukkit.getPlayer(ownerUUID);
+        if (owner == null || !owner.isOnline()) {
+            // Spieler offline -> Aufräumen
+            if (damagedEntity instanceof ArmorStand) {
+                armorStandOwners.remove(damagedEntity.getUniqueId());
+            } else {
+                hitboxEntities.remove(damagedEntity.getUniqueId());
+            }
+            cameraPlayers.remove(ownerUUID);
+            damagedEntity.remove();
             return;
         }
 
-        // Ignore damage to managed armor stands and hitboxes
+        if (!pendingDamage.add(ownerUUID)) {
+            // already scheduled damage for this hit
+            return;
+        }
+
+        if (owner.isDead()) {
+            event.setCancelled(true);
+            exitCameraMode(owner);
+            pendingDamage.remove(ownerUUID);
+            return;
+        }
+
+        // ArmorStand soll keinen Schaden nehmen, Haltbarkeit manuell berechnen
         event.setCancelled(true);
+
+        if (event instanceof EntityDamageByEntityEvent selfHit &&
+                selfHit.getDamager().getUniqueId().equals(owner.getUniqueId())) {
+            owner.sendMessage(getMessage("camera-off"));
+            exitCameraMode(owner);
+            pendingDamage.remove(ownerUUID);
+            return;
+        }
+
+        ArmorStand armorStand = cameraPlayers.get(ownerUUID).getArmorStand();
+        applyArmorDurabilityLoss(armorStand);
+        double reducedDamage = calculateFinalDamage(event, armorStand);
+
+        // Apply projectile effects such as tipped arrow potions and tweak melee
+        if (event instanceof EntityDamageByEntityEvent hitEvent) {
+            applyProjectileEffects(hitEvent.getDamager(), owner);
+            reducedDamage = adjustMeleeDamage(hitEvent, reducedDamage);
+        }
+
+
+        String damagerName = "Umgebung";
+        if (event instanceof EntityDamageByEntityEvent entityEvent) {
+            Entity damager = entityEvent.getDamager();
+            damagerName = damager instanceof Player ? damager.getName() : damager.getType().toString();
+        }
+
+        exitCameraMode(owner);
+
+        String finalDamagerName = damagerName;
+        double finalDamage = reducedDamage;
+        UUID targetUUID = ownerUUID;
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (owner.isOnline() && !owner.isDead()) {
+                    applyDirectDamage(owner, finalDamage);
+                    String messageKey = event instanceof EntityDamageByEntityEvent ?
+                            "body-attacked" : "body-env-damage";
+                    owner.sendMessage(getMessage(messageKey).replace("{damager}", finalDamagerName));
+                }
+                pendingDamage.remove(targetUUID);
+            }
+        }.runTaskLater(CameraPlugin.this, 1L);
+    }
+
+    // Alternative Methode falls Sie mehr Kontrolle benötigen:
+    private void applyPlayerDamageWithArmor(Player player, double baseDamage, Entity damager, EntityDamageEvent.DamageCause cause) {
+        // Rüstungswerte des Spielers abrufen
+        double armorValue = 0;
+        double armorToughness = 0;
+
+        ItemStack[] armor = player.getInventory().getArmorContents();
+        for (ItemStack piece : armor) {
+            if (piece != null && piece.getType() != Material.AIR) {
+                // Rüstungswerte basierend auf Material
+                armorValue += getArmorValue(piece);
+                armorToughness += getArmorToughness(piece);
+
+                // Verzauberungen berücksichtigen
+                if (piece.containsEnchantment(Enchantment.PROTECTION)) {
+                    // Protection reduziert Schaden um 4% pro Level
+                    int protLevel = piece.getEnchantmentLevel(Enchantment.PROTECTION);
+                    baseDamage *= (1 - (protLevel * 0.04));
+                }
+
+                // Spezifische Schutz-Verzauberungen je nach Schadenstyp
+                if (cause == EntityDamageEvent.DamageCause.PROJECTILE &&
+                        piece.containsEnchantment(Enchantment.PROJECTILE_PROTECTION)) {
+                    int protLevel = piece.getEnchantmentLevel(Enchantment.PROJECTILE_PROTECTION);
+                    baseDamage *= (1 - (protLevel * 0.08));
+                }
+                // Weitere Schutz-Verzauberungen hier hinzufügen...
+            }
+        }
+
+        // Rüstungsreduktion berechnen (vereinfachte Minecraft-Formel)
+        double damageReduction = Math.min(20, Math.max(armorValue / 5, armorValue - baseDamage / (2 + armorToughness / 4)));
+        double finalDamage = baseDamage * (1 - damageReduction / 25);
+
+        // Waffen-Verzauberungen des Angreifers berücksichtigen
+        if (damager instanceof Player attackerPlayer) {
+            ItemStack weapon = attackerPlayer.getInventory().getItemInMainHand();
+            if (weapon != null && weapon.containsEnchantment(Enchantment.SHARPNESS)) {
+                int sharpnessLevel = weapon.getEnchantmentLevel(Enchantment.SHARPNESS);
+                finalDamage += 0.5 * sharpnessLevel + 0.5; // Sharpness-Bonus
+            }
+            // Weitere Waffen-Verzauberungen hier hinzufügen...
+        }
+
+        // Schaden anwenden
+        player.damage(finalDamage, damager);
+
+        // Rüstungs-Haltbarkeit reduzieren
+        damageArmor(player, (int) Math.ceil(finalDamage));
+    }
+
+    private double getArmorValue(ItemStack armor) {
+        Material material = armor.getType();
+        switch (material) {
+            case LEATHER_HELMET: return 1;
+            case LEATHER_CHESTPLATE: return 3;
+            case LEATHER_LEGGINGS: return 2;
+            case LEATHER_BOOTS: return 1;
+
+            case CHAINMAIL_HELMET: return 2;
+            case CHAINMAIL_CHESTPLATE: return 5;
+            case CHAINMAIL_LEGGINGS: return 4;
+            case CHAINMAIL_BOOTS: return 1;
+
+            case IRON_HELMET: return 2;
+            case IRON_CHESTPLATE: return 6;
+            case IRON_LEGGINGS: return 5;
+            case IRON_BOOTS: return 2;
+
+            case DIAMOND_HELMET: return 3;
+            case DIAMOND_CHESTPLATE: return 8;
+            case DIAMOND_LEGGINGS: return 6;
+            case DIAMOND_BOOTS: return 3;
+
+            case NETHERITE_HELMET: return 3;
+            case NETHERITE_CHESTPLATE: return 8;
+            case NETHERITE_LEGGINGS: return 6;
+            case NETHERITE_BOOTS: return 3;
+
+            default: return 0;
+        }
+    }
+
+    private double getArmorToughness(ItemStack armor) {
+        Material material = armor.getType();
+        if (material.name().startsWith("NETHERITE_")) {
+            return 3; // Netherite hat +3 Toughness
+        } else if (material.name().startsWith("DIAMOND_")) {
+            return 2; // Diamond hat +2 Toughness
+        }
+        return 0;
+    }
+
+    private void damageArmor(Player player, int damage) {
+        ItemStack[] armor = player.getInventory().getArmorContents();
+        for (int i = 0; i < armor.length; i++) {
+            ItemStack piece = armor[i];
+            if (piece != null && piece.getType() != Material.AIR) {
+                // Unbreaking-Verzauberung berücksichtigen
+                int unbreakingLevel = piece.getEnchantmentLevel(Enchantment.UNBREAKING);
+                boolean shouldDamage = true;
+
+                if (unbreakingLevel > 0) {
+                    // Chance dass Item nicht beschädigt wird
+                    double chance = 1.0 / (unbreakingLevel + 1);
+                    shouldDamage = Math.random() < chance;
+                }
+
+                if (shouldDamage) {
+                    ItemMeta meta = piece.getItemMeta();
+                    if (meta instanceof Damageable) {
+                        Damageable damageable = (Damageable) meta;
+                        damageable.setDamage(damageable.getDamage() + 1);
+
+                        // Prüfen ob Item kaputt ist
+                        if (damageable.getDamage() >= piece.getType().getMaxDurability()) {
+                            armor[i] = null; // Item zerstören
+                            player.playSound(player.getLocation(), ENTITY_ITEM_BREAK, 1.0f, 1.0f);
+                        } else {
+                            piece.setItemMeta(meta);
+                        }
+                    }
+                }
+            }
+        }
+        player.getInventory().setArmorContents(armor);
     }
 
 
@@ -623,253 +814,466 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
 
 
 
-    // Remaining blocks: 1 damage each
-    double fallDamage = 0.0;
+    private void applyDirectDamage(Player player, double damage) {
+        if (damage <= 0 || player.isDead()) return;
+
+        damageImmunityBypass.add(player.getUniqueId());
+        try {
+            double newHealth = Math.max(0, player.getHealth() - damage);
+            player.setHealth(newHealth);
+
+            EntityDamageEvent damageEvent = new EntityDamageEvent(player, EntityDamageEvent.DamageCause.CUSTOM, damage);
+            damageEvent.setDamage(EntityDamageEvent.DamageModifier.BASE, damage);
+            player.setLastDamageCause(damageEvent);
+        } finally {
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    damageImmunityBypass.remove(player.getUniqueId());
+                }
+            }.runTaskLater(this, 1L);
+        }
+    }
+
+
+    /**
+     * Apply potion and special effects from a projectile to the player when
+     * the projectile hits the armor stand. This covers tipped and spectral
+     * arrows so that the player receives the same effects.
+     */
+    private void applyProjectileEffects(Entity projectile, Player target) {
+        if (!(projectile instanceof AbstractArrow arrow)) return;
+
+        if (projectile instanceof SpectralArrow) {
+            target.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, 200, 0));
+        }
+
+        if (projectile instanceof Arrow tipped) {
+            for (PotionEffect effect : tipped.getCustomEffects()) {
+                target.addPotionEffect(effect);
+            }
+
+            PotionData data = tipped.getBasePotionData();
+            PotionEffectType type = data.getType().getEffectType();
+            if (type != null && type != PotionEffectType.INSTANT_HEALTH && type != PotionEffectType.INSTANT_DAMAGE) {
+                int duration = 160;
+                int amplifier = data.isUpgraded() ? 1 : 0;
+                if (data.isExtended()) {
+                    duration *= 2;
+                }
+                target.addPotionEffect(new PotionEffect(type, duration, amplifier));
+            }
+        }
+
+        projectile.remove();
+    }
+
+    /**
+     * Berechnet den Schaden nach Rüstungsreduktion anhand der Ausrüstung des ArmorStands.
+     * Diese Methode simuliert die Schadensberechnung eines normalen Spielers.
+     *
+     * @param originalDamage Der ursprüngliche Schaden vor Rüstungsreduktion.
+     * @param armorStand     Der ArmorStand, dessen Rüstung verwendet wird.
+     * @return Der reduzierte Schaden.
+     */
+    private double calculateArmorReducedDamage(double originalDamage, ArmorStand armorStand) {
+        ItemStack[] armor = armorStand.getEquipment().getArmorContents();
+        int armorPoints = 0;
+        int toughness = 0;
+
+        for (ItemStack item : armor) {
+            if (item == null || item.getType() == Material.AIR) continue;
+            switch (item.getType()) {
+                case LEATHER_HELMET -> armorPoints += 1;
+                case LEATHER_CHESTPLATE, ELYTRA -> armorPoints += 3;
+                case LEATHER_LEGGINGS -> armorPoints += 2;
+                case LEATHER_BOOTS -> armorPoints += 1;
+
+                case CHAINMAIL_HELMET -> armorPoints += 2;
+                case CHAINMAIL_CHESTPLATE -> armorPoints += 5;
+                case CHAINMAIL_LEGGINGS -> armorPoints += 4;
+                case CHAINMAIL_BOOTS -> armorPoints += 1;
+
+                case IRON_HELMET -> armorPoints += 2;
+                case IRON_CHESTPLATE -> armorPoints += 6;
+                case IRON_LEGGINGS -> armorPoints += 5;
+                case IRON_BOOTS -> armorPoints += 2;
+
+                case GOLDEN_HELMET -> armorPoints += 2;
+                case GOLDEN_CHESTPLATE -> armorPoints += 5;
+                case GOLDEN_LEGGINGS -> armorPoints += 3;
+                case GOLDEN_BOOTS -> armorPoints += 1;
+
+                case DIAMOND_HELMET -> { armorPoints += 3; toughness += 2; }
+                case DIAMOND_CHESTPLATE -> { armorPoints += 8; toughness += 2; }
+                case DIAMOND_LEGGINGS -> { armorPoints += 6; toughness += 2; }
+                case DIAMOND_BOOTS -> { armorPoints += 3; toughness += 2; }
+
+                case NETHERITE_HELMET -> { armorPoints += 3; toughness += 3; }
+                case NETHERITE_CHESTPLATE -> { armorPoints += 8; toughness += 3; }
+                case NETHERITE_LEGGINGS -> { armorPoints += 6; toughness += 3; }
+                case NETHERITE_BOOTS -> { armorPoints += 3; toughness += 3; }
+
+                case TURTLE_HELMET -> armorPoints += 2;
+
+                default -> {}
+            }
+        }
+
+        double damageAfterToughness = originalDamage * (1 - Math.min(20.0,
+                Math.max(armorPoints / 5.0, armorPoints - originalDamage / (2.0 + toughness / 4.0))) / 25.0);
+        return Math.max(0, damageAfterToughness);
+    }
+
+    /**
+     * Wendet Schaden direkt auf die Lebenspunkte des Spielers an, ohne die Rüstung erneut zu berechnen.
+     * Dies wird verwendet, nachdem der Schaden bereits gegen die Rüstung des ArmorStands berechnet wurde.
+     */
+    private double calculateFinalDamage(EntityDamageEvent baseEvent, ArmorStand armorStand) {
+        double damageAfterArmor = calculateArmorReducedDamage(baseEvent.getDamage(), armorStand);
+
+        int epf = 0;
+        DamageCause cause = baseEvent.getCause();
+
+        for (ItemStack item : armorStand.getEquipment().getArmorContents()) {
+            if (item == null) continue;
+            epf += getEnchantmentProtectionFactor(item, cause);
+        }
+
+        double enchantmentReduction = Math.min(20, epf) / 25.0;
+        return damageAfterArmor * (1.0 - enchantmentReduction);
+    }
+
+    private int getEnchantmentProtectionFactor(ItemStack item, DamageCause cause) {
+        int epf = 0;
+        if (item.getEnchantments().isEmpty()) return epf;
+
+        int level;
+
+        level = item.getEnchantmentLevel(Enchantment.PROTECTION);
+        if (level > 0) epf += level;
+
+        level = item.getEnchantmentLevel(Enchantment.FIRE_PROTECTION);
+        if (level > 0 && (cause == DamageCause.LAVA || cause == DamageCause.FIRE || cause == DamageCause.HOT_FLOOR || cause == DamageCause.FIRE_TICK)) {
+            epf += level * 2;
+        }
+
+        level = item.getEnchantmentLevel(Enchantment.BLAST_PROTECTION);
+        if (level > 0 && (cause == DamageCause.ENTITY_EXPLOSION || cause == DamageCause.BLOCK_EXPLOSION)) {
+            epf += level * 2;
+        }
+
+        level = item.getEnchantmentLevel(Enchantment.PROJECTILE_PROTECTION);
+        if (level > 0 && cause == DamageCause.PROJECTILE) {
+            epf += level * 2;
+        }
+
+        level = item.getEnchantmentLevel(Enchantment.FEATHER_FALLING);
+        if (level > 0 && cause == DamageCause.FALL) {
+            epf += level * 3;
+        }
+
+        return epf;
+    }
+
+    /**
+     * Adjust melee damage to better match vanilla behaviour. This compensates
+     * for known inaccuracies when swords and maces hit the armor stand.
+     */
+    private double adjustMeleeDamage(EntityDamageByEntityEvent event, double damage) {
+        Entity damager = event.getDamager();
+        if (!(damager instanceof Player attacker)) return damage;
+
+        ItemStack weapon = attacker.getInventory().getItemInMainHand();
+        Material type = weapon.getType();
+        double eventBase = event.getDamage();
+        double correctBase = eventBase;
+
+        if (type.name().endsWith("_SWORD")) {
+            // Fix sword damage calculation
+            int sharp = weapon.getEnchantmentLevel(Enchantment.SHARPNESS);
+            double base = switch (type) {
+                case WOODEN_SWORD, GOLDEN_SWORD -> 4.0;
+                case STONE_SWORD -> 5.0;
+                case IRON_SWORD -> 6.0;
+                case DIAMOND_SWORD -> 7.0;
+                case NETHERITE_SWORD -> 8.0;
+                default -> eventBase;
+            };
+
+            // Apply sharpness first (before critical hit multiplier)
+            if (sharp > 0) {
+                base += 1.0 + 0.5 * (sharp - 1);
+            }
+
+            // Critical hit multiplies the total damage (base + sharpness)
+            boolean critical = attacker.getFallDistance() > 0 && !attacker.isOnGround();
+            if (critical) {
+                base *= 1.5;
+            }
+
+            correctBase = base;
+
+        } else if (type == Material.MACE) {
+            // Fix mace damage calculation according to wiki
+            boolean airborne = attacker.getFallDistance() > 0 && !attacker.isOnGround();
+            double fallBlocks = Math.floor(attacker.getFallDistance());
+
+            // Base damage: 7 for normal attack, 10.5 for critical (airborne)
+            double base = airborne ? 10.5 : 7.0;
+
+            // Only calculate fall damage if airborne and fell at least 1.5 blocks
+            if (airborne && attacker.getFallDistance() >= 1.5) {
+                // Fall damage calculation according to wiki:
+                // First 3 blocks: 4 damage each
+                // Next 5 blocks: 2 damage each
+                // Remaining blocks: 1 damage each
+                double fallDamage = 0.0;
 
                 if (fallBlocks >= 1) {
-        // First 3 blocks (or less if fall is shorter)
-        double firstBlocks = Math.min(fallBlocks, 3);
-        fallDamage += firstBlocks * 4.0;
+                    // First 3 blocks (or less if fall is shorter)
+                    double firstBlocks = Math.min(fallBlocks, 3);
+                    fallDamage += firstBlocks * 4.0;
 
-        if (fallBlocks > 3) {
-            // Next 5 blocks (blocks 4-8)
-            double middleBlocks = Math.min(fallBlocks - 3, 5);
-            fallDamage += middleBlocks * 2.0;
+                    if (fallBlocks > 3) {
+                        // Next 5 blocks (blocks 4-8)
+                        double middleBlocks = Math.min(fallBlocks - 3, 5);
+                        fallDamage += middleBlocks * 2.0;
 
-            if (fallBlocks > 8) {
-                // Remaining blocks (9+)
-                double remainingBlocks = fallBlocks - 8;
-                fallDamage += remainingBlocks * 1.0;
-            }
-        }
-    }
+                        if (fallBlocks > 8) {
+                            // Remaining blocks (9+)
+                            double remainingBlocks = fallBlocks - 8;
+                            fallDamage += remainingBlocks * 1.0;
+                        }
+                    }
+                }
 
-    // Apply Density enchantment (adds 0.5 damage per level per block)
-    int density = weapon.getEnchantmentLevel(Enchantment.DENSITY);
+                // Apply Density enchantment (adds 0.5 damage per level per block)
+                int density = weapon.getEnchantmentLevel(Enchantment.DENSITY);
                 if (density > 0) {
-        fallDamage += fallBlocks * density * 0.5;
-    }
+                    fallDamage += fallBlocks * density * 0.5;
+                }
 
-    // Critical hit increases fall damage by 50%
+                // Critical hit increases fall damage by 50%
                 if (airborne) {
-        fallDamage *= 1.5;
-    }
+                    fallDamage *= 1.5;
+                }
 
-    base += fallDamage;
-}
+                base += fallDamage;
+            }
 
-// Apply Breach enchantment (adds 1 damage per level)
-int breach = weapon.getEnchantmentLevel(Enchantment.BREACH);
+            // Apply Breach enchantment (adds 1 damage per level)
+            int breach = weapon.getEnchantmentLevel(Enchantment.BREACH);
             if (breach > 0) {
-base += breach;
+                base += breach;
             }
 
-correctBase = base;
+            correctBase = base;
         }
 
-                return Math.max(0.0, damage + (correctBase - eventBase));
+        return Math.max(0.0, damage + (correctBase - eventBase));
+    }
+
+    /**
+     * Wendet Haltbarkeitsschaden auf die Rüstung an und berücksichtigt dabei
+     * die Unbreaking-Verzauberung.
+     */
+    private void applyArmorDurabilityLoss(ArmorStand stand) {
+        for (ItemStack item : stand.getEquipment().getArmorContents()) {
+            if (item == null) continue;
+            ItemMeta meta = item.getItemMeta();
+            if (!(meta instanceof Damageable damageable)) continue;
+
+            // Since Spigot 1.21 the unbreaking enchantment constant was renamed
+            // from DURABILITY to UNBREAKING. Use the new name so it resolves
+            // correctly when compiling against the latest API.
+            int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
+            double chanceNoDamage = switch (unbreaking) {
+                case 0 -> 0.0;
+                case 1 -> 0.5;
+                case 2 -> 2.0 / 3.0;
+                default -> 0.75; // Level 3 or higher
+            };
+
+            if (Math.random() >= chanceNoDamage) {
+                damageable.setDamage(damageable.getDamage() + 1);
+                item.setItemMeta(damageable);
+            }
         }
+    }
 
-/**
- * Wendet Haltbarkeitsschaden auf die Rüstung an und berücksichtigt dabei
- * die Unbreaking-Verzauberung.
- */
-private void applyArmorDurabilityLoss(ArmorStand stand) {
-    for (ItemStack item : stand.getEquipment().getArmorContents()) {
-        if (item == null) continue;
-        ItemMeta meta = item.getItemMeta();
-        if (!(meta instanceof Damageable damageable)) continue;
+    /**
+     * Copy durability values from the armor stand's equipment back to the
+     * player's original armor items.
+     */
+    private void syncArmorBack(Player player, ArmorStand armorStand, ItemStack[] originalArmor) {
+        ItemStack[] standArmor = armorStand.getEquipment().getArmorContents();
+        for (int i = 0; i < originalArmor.length; i++) {
+            ItemStack original = originalArmor[i];
+            ItemStack fromStand = standArmor.length > i ? standArmor[i] : null;
 
-        // Since Spigot 1.21 the unbreaking enchantment constant was renamed
-        // from DURABILITY to UNBREAKING. Use the new name so it resolves
-        // correctly when compiling against the latest API.
-        int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
-        double chanceNoDamage = switch (unbreaking) {
-            case 0 -> 0.0;
-            case 1 -> 0.5;
-            case 2 -> 2.0 / 3.0;
-            default -> 0.75; // Level 3 or higher
+            if (original != null && fromStand != null && original.getType() == fromStand.getType()) {
+                ItemMeta standMeta = fromStand.getItemMeta();
+                ItemMeta originalMeta = original.getItemMeta();
+                if (standMeta instanceof Damageable && originalMeta instanceof Damageable) {
+                    int damage = ((Damageable) standMeta).getDamage();
+                    ((Damageable) originalMeta).setDamage(damage);
+                    original.setItemMeta(originalMeta);
+                }
+            }
+        }
+        // Sicherheitshalber noch einmal setzen
+        player.getInventory().setArmorContents(originalArmor);
+    }
+
+
+    public String getMessage(String path) {
+        return ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages." + path, ""));
+    }
+
+    private void loadConfigValues() {
+        maxDistanceEnabled = getConfig().getBoolean("camera-mode.max-distance-enabled", true);
+        maxDistance = getConfig().getDouble("camera-mode.max-distance", 100.0);
+        distanceWarningCooldown = getConfig().getInt("camera-mode.distance-warning-cooldown", 3);
+        drowningDamage = getConfig().getDouble("camera-mode.drowning-damage", 2.0);
+        String visibility = getConfig().getString("camera-mode.player_visibility_mode", "cam").toLowerCase();
+        playerVisibilityMode = switch (visibility) {
+            case "true" -> VisibilityMode.ALL;
+            case "false" -> VisibilityMode.NONE;
+            default -> VisibilityMode.CAM;
         };
+        allowInvisibilityPotion = getConfig().getBoolean("camera-mode.allow_invisibility_potion", true);
+        armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
+        armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
+        armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
+    }
 
-        if (Math.random() >= chanceNoDamage) {
-            damageable.setDamage(damageable.getDamage() + 1);
-            item.setItemMeta(damageable);
+    private void setupNoCollisionTeam() {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team == null) {
+            team = scoreboard.registerNewTeam(NO_COLLISION_TEAM);
         }
-    }
-}
-
-/**
- * Copy durability values from the armor stand's equipment back to the
- * player's original armor items.
- */
-private void syncArmorBack(Player player, ArmorStand armorStand, ItemStack[] originalArmor) {
-    ItemStack[] standArmor = armorStand.getEquipment().getArmorContents();
-    for (int i = 0; i < originalArmor.length; i++) {
-        ItemStack original = originalArmor[i];
-        ItemStack fromStand = standArmor.length > i ? standArmor[i] : null;
-
-        if (original != null && fromStand != null && original.getType() == fromStand.getType()) {
-            ItemMeta standMeta = fromStand.getItemMeta();
-            ItemMeta originalMeta = original.getItemMeta();
-            if (standMeta instanceof Damageable && originalMeta instanceof Damageable) {
-                int damage = ((Damageable) standMeta).getDamage();
-                ((Damageable) originalMeta).setDamage(damage);
-                original.setItemMeta(originalMeta);
-            }
-        }
-    }
-    // Sicherheitshalber noch einmal setzen
-    player.getInventory().setArmorContents(originalArmor);
-}
-
-
-public String getMessage(String path) {
-    return ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages." + path, ""));
-}
-
-private void loadConfigValues() {
-    maxDistanceEnabled = getConfig().getBoolean("camera-mode.max-distance-enabled", true);
-    maxDistance = getConfig().getDouble("camera-mode.max-distance", 100.0);
-    distanceWarningCooldown = getConfig().getInt("camera-mode.distance-warning-cooldown", 3);
-    drowningDamage = getConfig().getDouble("camera-mode.drowning-damage", 2.0);
-    String visibility = getConfig().getString("camera-mode.player_visibility_mode", "cam").toLowerCase();
-    playerVisibilityMode = switch (visibility) {
-        case "true" -> VisibilityMode.ALL;
-        case "false" -> VisibilityMode.NONE;
-        default -> VisibilityMode.CAM;
-    };
-    allowInvisibilityPotion = getConfig().getBoolean("camera-mode.allow_invisibility_potion", true);
-    armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
-    armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
-    armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
-    armorStandDamageAmount = getConfig().getDouble("armorstand.damage-amount", 1.0);
-    armorDurabilityLoss = getConfig().getBoolean("armorstand.durability-loss", true);
-    damageIgnoreArmor = getConfig().getBoolean("armorstand.damage-ignore-armor", true);
-}
-
-private void setupNoCollisionTeam() {
-    Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-    Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-    if (team == null) {
-        team = scoreboard.registerNewTeam(NO_COLLISION_TEAM);
-    }
-    team.setOption(Team.Option.COLLISION_RULE, Team.OptionStatus.NEVER);
-    team.setCanSeeFriendlyInvisibles(true);
-}
-
-private void addPlayerToNoCollisionTeam(Player player) {
-    Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-    Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-    if (team != null) {
-        team.addEntry(player.getName());
-    }
-}
-
-private void removePlayerFromNoCollisionTeam(Player player) {
-    Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-    Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-    if (team != null) {
-        team.removeEntry(player.getName());
-    }
-}
-
-private void updateViewerTeam(Player player) {
-    Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-    Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-    if (team == null) return;
-
-    boolean inCam = cameraPlayers.containsKey(player.getUniqueId());
-    boolean shouldBeMember;
-
-    if (inCam) {
-        shouldBeMember = true;
-    } else if (allowInvisibilityPotion && playerVisibilityMode == VisibilityMode.ALL) {
-        shouldBeMember = !player.hasPotionEffect(PotionEffectType.INVISIBILITY);
-    } else {
-        shouldBeMember = false;
+        team.setOption(Team.Option.COLLISION_RULE, Team.OptionStatus.NEVER);
+        team.setCanSeeFriendlyInvisibles(true);
     }
 
-    if (shouldBeMember) {
-        if (!team.hasEntry(player.getName())) {
+    private void addPlayerToNoCollisionTeam(Player player) {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team != null) {
             team.addEntry(player.getName());
         }
-    } else {
-        if (team.hasEntry(player.getName())) {
+    }
+
+    private void removePlayerFromNoCollisionTeam(Player player) {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team != null) {
             team.removeEntry(player.getName());
         }
     }
-}
 
-private void applyVisibility(Player camPlayer, Player viewer) {
-    if (camPlayer.equals(viewer)) return;
-    switch (playerVisibilityMode) {
-        case CAM -> {
-            if (cameraPlayers.containsKey(viewer.getUniqueId())) {
-                viewer.showPlayer(this, camPlayer);
-            } else {
-                viewer.hidePlayer(this, camPlayer);
+    private void updateViewerTeam(Player player) {
+        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+        if (team == null) return;
+
+        boolean inCam = cameraPlayers.containsKey(player.getUniqueId());
+        boolean shouldBeMember;
+
+        if (inCam) {
+            shouldBeMember = true;
+        } else if (allowInvisibilityPotion && playerVisibilityMode == VisibilityMode.ALL) {
+            shouldBeMember = !player.hasPotionEffect(PotionEffectType.INVISIBILITY);
+        } else {
+            shouldBeMember = false;
+        }
+
+        if (shouldBeMember) {
+            if (!team.hasEntry(player.getName())) {
+                team.addEntry(player.getName());
+            }
+        } else {
+            if (team.hasEntry(player.getName())) {
+                team.removeEntry(player.getName());
             }
         }
-        case ALL -> viewer.showPlayer(this, camPlayer);
-        case NONE -> viewer.hidePlayer(this, camPlayer);
     }
-}
 
-private void updateVisibilityForAll() {
-    for (UUID camId : cameraPlayers.keySet()) {
-        Player cam = Bukkit.getPlayer(camId);
-        if (cam == null) continue;
-        for (Player viewer : Bukkit.getOnlinePlayers()) {
-            applyVisibility(cam, viewer);
+    private void applyVisibility(Player camPlayer, Player viewer) {
+        if (camPlayer.equals(viewer)) return;
+        switch (playerVisibilityMode) {
+            case CAM -> {
+                if (cameraPlayers.containsKey(viewer.getUniqueId())) {
+                    viewer.showPlayer(this, camPlayer);
+                } else {
+                    viewer.hidePlayer(this, camPlayer);
+                }
+            }
+            case ALL -> viewer.showPlayer(this, camPlayer);
+            case NONE -> viewer.hidePlayer(this, camPlayer);
         }
     }
-}
 
-public void reloadPlugin(Player initiator) {
-    for (UUID uuid : new HashSet<>(cameraPlayers.keySet())) {
-        Player camPlayer = Bukkit.getPlayer(uuid);
-        if (camPlayer != null) {
-            camPlayer.sendMessage(getMessage("reload-exit"));
-            exitCameraMode(camPlayer);
+    private void updateVisibilityForAll() {
+        for (UUID camId : cameraPlayers.keySet()) {
+            Player cam = Bukkit.getPlayer(camId);
+            if (cam == null) continue;
+            for (Player viewer : Bukkit.getOnlinePlayers()) {
+                applyVisibility(cam, viewer);
+            }
         }
     }
-    reloadConfig();
-    loadConfigValues();
-    setupNoCollisionTeam();
-    for (Player online : Bukkit.getOnlinePlayers()) {
-        updateViewerTeam(online);
+
+    public void reloadPlugin(Player initiator) {
+        for (UUID uuid : new HashSet<>(cameraPlayers.keySet())) {
+            Player camPlayer = Bukkit.getPlayer(uuid);
+            if (camPlayer != null) {
+                camPlayer.sendMessage(getMessage("reload-exit"));
+                exitCameraMode(camPlayer);
+            }
+        }
+        reloadConfig();
+        loadConfigValues();
+        setupNoCollisionTeam();
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            updateViewerTeam(online);
+        }
+    }
+
+    // *** CameraData Klasse erweitert ***
+    private static class CameraData {
+        private final ArmorStand armorStand;
+        private final Villager hitbox;
+        private final GameMode originalGameMode;
+        private final boolean originalAllowFlight;
+        private final boolean originalFlying;
+        private final boolean originalSilent;
+        private final ItemStack[] originalInventoryContents; // Für Inventar
+        private final ItemStack[] originalArmorContents;     // Für Rüstung
+        private final Collection<PotionEffect> pausedEffects;
+
+        public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents, Collection<PotionEffect> pausedEffects) {
+            this.armorStand = armorStand;
+            this.hitbox = hitbox;
+            this.originalGameMode = originalGameMode;
+            this.originalAllowFlight = originalAllowFlight;
+            this.originalFlying = originalFlying;
+            this.originalSilent = originalSilent;
+            this.originalInventoryContents = originalInventoryContents;
+            this.originalArmorContents = originalArmorContents;
+            this.pausedEffects = pausedEffects;
+        }
+
+        public ArmorStand getArmorStand() { return armorStand; }
+        public Villager getHitbox() { return hitbox; }
+        public GameMode getOriginalGameMode() { return originalGameMode; }
+        public boolean getOriginalAllowFlight() { return originalAllowFlight; }
+        public boolean getOriginalFlying() { return originalFlying; }
+        public boolean getOriginalSilent() { return originalSilent; }
+        public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }
+        public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
+        public Collection<PotionEffect> getPausedEffects() { return pausedEffects; }
     }
 }
-
-// *** CameraData Klasse erweitert ***
-private static class CameraData {
-    private final ArmorStand armorStand;
-    private final Villager hitbox;
-    private final GameMode originalGameMode;
-    private final boolean originalAllowFlight;
-    private final boolean originalFlying;
-    private final boolean originalSilent;
-    private final ItemStack[] originalInventoryContents; // Für Inventar
-    private final ItemStack[] originalArmorContents;     // Für Rüstung
-    private final Collection<PotionEffect> pausedEffects;
-
-    public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents, Collection<PotionEffect> pausedEffects) {
-        this.armorStand = armorStand;
-        this.hitbox = hitbox;
-        this.originalGameMode = originalGameMode;
-        this.originalAllowFlight = originalAllowFlight;
-        this.originalFlying = originalFlying;
-        this.originalSilent = originalSilent;
-        this.originalInventoryContents = originalInventoryContents;
-        this.originalArmorContents = originalArmorContents;
-        this.pausedEffects = pausedEffects;
-    }
-
-    public ArmorStand getArmorStand() { return armorStand; }
-    public Villager getHitbox() { return hitbox; }
-    public GameMode getOriginalGameMode() { return originalGameMode; }
-    public boolean getOriginalAllowFlight() { return originalAllowFlight; }
-    public boolean getOriginalFlying() { return originalFlying; }
-    public boolean getOriginalSilent() { return originalSilent; }
-    public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }
-    public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
