@@ -621,208 +621,255 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    /**
-     * Wendet Haltbarkeitsschaden auf die Rüstung an und berücksichtigt dabei
-     * die Unbreaking-Verzauberung.
-     */
-    private void applyArmorDurabilityLoss(ArmorStand stand) {
-        for (ItemStack item : stand.getEquipment().getArmorContents()) {
-            if (item == null) continue;
-            ItemMeta meta = item.getItemMeta();
-            if (!(meta instanceof Damageable damageable)) continue;
 
-            // Since Spigot 1.21 the unbreaking enchantment constant was renamed
-            // from DURABILITY to UNBREAKING. Use the new name so it resolves
-            // correctly when compiling against the latest API.
-            int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
-            double chanceNoDamage = switch (unbreaking) {
-                case 0 -> 0.0;
-                case 1 -> 0.5;
-                case 2 -> 2.0 / 3.0;
-                default -> 0.75; // Level 3 or higher
-            };
 
-            if (Math.random() >= chanceNoDamage) {
-                damageable.setDamage(damageable.getDamage() + 1);
-                item.setItemMeta(damageable);
+    // Remaining blocks: 1 damage each
+    double fallDamage = 0.0;
+
+                if (fallBlocks >= 1) {
+        // First 3 blocks (or less if fall is shorter)
+        double firstBlocks = Math.min(fallBlocks, 3);
+        fallDamage += firstBlocks * 4.0;
+
+        if (fallBlocks > 3) {
+            // Next 5 blocks (blocks 4-8)
+            double middleBlocks = Math.min(fallBlocks - 3, 5);
+            fallDamage += middleBlocks * 2.0;
+
+            if (fallBlocks > 8) {
+                // Remaining blocks (9+)
+                double remainingBlocks = fallBlocks - 8;
+                fallDamage += remainingBlocks * 1.0;
             }
         }
     }
 
-    /**
-     * Copy durability values from the armor stand's equipment back to the
-     * player's original armor items.
-     */
-    private void syncArmorBack(Player player, ArmorStand armorStand, ItemStack[] originalArmor) {
-        ItemStack[] standArmor = armorStand.getEquipment().getArmorContents();
-        for (int i = 0; i < originalArmor.length; i++) {
-            ItemStack original = originalArmor[i];
-            ItemStack fromStand = standArmor.length > i ? standArmor[i] : null;
+    // Apply Density enchantment (adds 0.5 damage per level per block)
+    int density = weapon.getEnchantmentLevel(Enchantment.DENSITY);
+                if (density > 0) {
+        fallDamage += fallBlocks * density * 0.5;
+    }
 
-            if (original != null && fromStand != null && original.getType() == fromStand.getType()) {
-                ItemMeta standMeta = fromStand.getItemMeta();
-                ItemMeta originalMeta = original.getItemMeta();
-                if (standMeta instanceof Damageable && originalMeta instanceof Damageable) {
-                    int damage = ((Damageable) standMeta).getDamage();
-                    ((Damageable) originalMeta).setDamage(damage);
-                    original.setItemMeta(originalMeta);
-                }
+    // Critical hit increases fall damage by 50%
+                if (airborne) {
+        fallDamage *= 1.5;
+    }
+
+    base += fallDamage;
+}
+
+// Apply Breach enchantment (adds 1 damage per level)
+int breach = weapon.getEnchantmentLevel(Enchantment.BREACH);
+            if (breach > 0) {
+base += breach;
             }
+
+correctBase = base;
         }
-        // Sicherheitshalber noch einmal setzen
-        player.getInventory().setArmorContents(originalArmor);
-    }
 
+                return Math.max(0.0, damage + (correctBase - eventBase));
+        }
 
-    public String getMessage(String path) {
-        return ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages." + path, ""));
-    }
+/**
+ * Wendet Haltbarkeitsschaden auf die Rüstung an und berücksichtigt dabei
+ * die Unbreaking-Verzauberung.
+ */
+private void applyArmorDurabilityLoss(ArmorStand stand) {
+    for (ItemStack item : stand.getEquipment().getArmorContents()) {
+        if (item == null) continue;
+        ItemMeta meta = item.getItemMeta();
+        if (!(meta instanceof Damageable damageable)) continue;
 
-    private void loadConfigValues() {
-        maxDistanceEnabled = getConfig().getBoolean("camera-mode.max-distance-enabled", true);
-        maxDistance = getConfig().getDouble("camera-mode.max-distance", 100.0);
-        distanceWarningCooldown = getConfig().getInt("camera-mode.distance-warning-cooldown", 3);
-        drowningDamage = getConfig().getDouble("camera-mode.drowning-damage", 2.0);
-        String visibility = getConfig().getString("camera-mode.player_visibility_mode", "cam").toLowerCase();
-        playerVisibilityMode = switch (visibility) {
-            case "true" -> VisibilityMode.ALL;
-            case "false" -> VisibilityMode.NONE;
-            default -> VisibilityMode.CAM;
+        // Since Spigot 1.21 the unbreaking enchantment constant was renamed
+        // from DURABILITY to UNBREAKING. Use the new name so it resolves
+        // correctly when compiling against the latest API.
+        int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
+        double chanceNoDamage = switch (unbreaking) {
+            case 0 -> 0.0;
+            case 1 -> 0.5;
+            case 2 -> 2.0 / 3.0;
+            default -> 0.75; // Level 3 or higher
         };
-        allowInvisibilityPotion = getConfig().getBoolean("camera-mode.allow_invisibility_potion", true);
-        armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
-        armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
-        armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
-        armorStandDamageAmount = getConfig().getDouble("armorstand.damage-amount", 1.0);
-        armorDurabilityLoss = getConfig().getBoolean("armorstand.durability-loss", true);
-        damageIgnoreArmor = getConfig().getBoolean("armorstand.damage-ignore-armor", true);
-    }
 
-    private void setupNoCollisionTeam() {
-        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-        if (team == null) {
-            team = scoreboard.registerNewTeam(NO_COLLISION_TEAM);
+        if (Math.random() >= chanceNoDamage) {
+            damageable.setDamage(damageable.getDamage() + 1);
+            item.setItemMeta(damageable);
         }
-        team.setOption(Team.Option.COLLISION_RULE, Team.OptionStatus.NEVER);
-        team.setCanSeeFriendlyInvisibles(true);
+    }
+}
+
+/**
+ * Copy durability values from the armor stand's equipment back to the
+ * player's original armor items.
+ */
+private void syncArmorBack(Player player, ArmorStand armorStand, ItemStack[] originalArmor) {
+    ItemStack[] standArmor = armorStand.getEquipment().getArmorContents();
+    for (int i = 0; i < originalArmor.length; i++) {
+        ItemStack original = originalArmor[i];
+        ItemStack fromStand = standArmor.length > i ? standArmor[i] : null;
+
+        if (original != null && fromStand != null && original.getType() == fromStand.getType()) {
+            ItemMeta standMeta = fromStand.getItemMeta();
+            ItemMeta originalMeta = original.getItemMeta();
+            if (standMeta instanceof Damageable && originalMeta instanceof Damageable) {
+                int damage = ((Damageable) standMeta).getDamage();
+                ((Damageable) originalMeta).setDamage(damage);
+                original.setItemMeta(originalMeta);
+            }
+        }
+    }
+    // Sicherheitshalber noch einmal setzen
+    player.getInventory().setArmorContents(originalArmor);
+}
+
+
+public String getMessage(String path) {
+    return ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages." + path, ""));
+}
+
+private void loadConfigValues() {
+    maxDistanceEnabled = getConfig().getBoolean("camera-mode.max-distance-enabled", true);
+    maxDistance = getConfig().getDouble("camera-mode.max-distance", 100.0);
+    distanceWarningCooldown = getConfig().getInt("camera-mode.distance-warning-cooldown", 3);
+    drowningDamage = getConfig().getDouble("camera-mode.drowning-damage", 2.0);
+    String visibility = getConfig().getString("camera-mode.player_visibility_mode", "cam").toLowerCase();
+    playerVisibilityMode = switch (visibility) {
+        case "true" -> VisibilityMode.ALL;
+        case "false" -> VisibilityMode.NONE;
+        default -> VisibilityMode.CAM;
+    };
+    allowInvisibilityPotion = getConfig().getBoolean("camera-mode.allow_invisibility_potion", true);
+    armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
+    armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
+    armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
+    armorStandDamageAmount = getConfig().getDouble("armorstand.damage-amount", 1.0);
+    armorDurabilityLoss = getConfig().getBoolean("armorstand.durability-loss", true);
+    damageIgnoreArmor = getConfig().getBoolean("armorstand.damage-ignore-armor", true);
+}
+
+private void setupNoCollisionTeam() {
+    Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+    Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+    if (team == null) {
+        team = scoreboard.registerNewTeam(NO_COLLISION_TEAM);
+    }
+    team.setOption(Team.Option.COLLISION_RULE, Team.OptionStatus.NEVER);
+    team.setCanSeeFriendlyInvisibles(true);
+}
+
+private void addPlayerToNoCollisionTeam(Player player) {
+    Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+    Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+    if (team != null) {
+        team.addEntry(player.getName());
+    }
+}
+
+private void removePlayerFromNoCollisionTeam(Player player) {
+    Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+    Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+    if (team != null) {
+        team.removeEntry(player.getName());
+    }
+}
+
+private void updateViewerTeam(Player player) {
+    Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
+    Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
+    if (team == null) return;
+
+    boolean inCam = cameraPlayers.containsKey(player.getUniqueId());
+    boolean shouldBeMember;
+
+    if (inCam) {
+        shouldBeMember = true;
+    } else if (allowInvisibilityPotion && playerVisibilityMode == VisibilityMode.ALL) {
+        shouldBeMember = !player.hasPotionEffect(PotionEffectType.INVISIBILITY);
+    } else {
+        shouldBeMember = false;
     }
 
-    private void addPlayerToNoCollisionTeam(Player player) {
-        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-        if (team != null) {
+    if (shouldBeMember) {
+        if (!team.hasEntry(player.getName())) {
             team.addEntry(player.getName());
         }
-    }
-
-    private void removePlayerFromNoCollisionTeam(Player player) {
-        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-        if (team != null) {
+    } else {
+        if (team.hasEntry(player.getName())) {
             team.removeEntry(player.getName());
         }
     }
+}
 
-    private void updateViewerTeam(Player player) {
-        Scoreboard scoreboard = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = scoreboard.getTeam(NO_COLLISION_TEAM);
-        if (team == null) return;
-
-        boolean inCam = cameraPlayers.containsKey(player.getUniqueId());
-        boolean shouldBeMember;
-
-        if (inCam) {
-            shouldBeMember = true;
-        } else if (allowInvisibilityPotion && playerVisibilityMode == VisibilityMode.ALL) {
-            shouldBeMember = !player.hasPotionEffect(PotionEffectType.INVISIBILITY);
-        } else {
-            shouldBeMember = false;
-        }
-
-        if (shouldBeMember) {
-            if (!team.hasEntry(player.getName())) {
-                team.addEntry(player.getName());
-            }
-        } else {
-            if (team.hasEntry(player.getName())) {
-                team.removeEntry(player.getName());
+private void applyVisibility(Player camPlayer, Player viewer) {
+    if (camPlayer.equals(viewer)) return;
+    switch (playerVisibilityMode) {
+        case CAM -> {
+            if (cameraPlayers.containsKey(viewer.getUniqueId())) {
+                viewer.showPlayer(this, camPlayer);
+            } else {
+                viewer.hidePlayer(this, camPlayer);
             }
         }
-    }
-
-    private void applyVisibility(Player camPlayer, Player viewer) {
-        if (camPlayer.equals(viewer)) return;
-        switch (playerVisibilityMode) {
-            case CAM -> {
-                if (cameraPlayers.containsKey(viewer.getUniqueId())) {
-                    viewer.showPlayer(this, camPlayer);
-                } else {
-                    viewer.hidePlayer(this, camPlayer);
-                }
-            }
-            case ALL -> viewer.showPlayer(this, camPlayer);
-            case NONE -> viewer.hidePlayer(this, camPlayer);
-        }
-    }
-
-    private void updateVisibilityForAll() {
-        for (UUID camId : cameraPlayers.keySet()) {
-            Player cam = Bukkit.getPlayer(camId);
-            if (cam == null) continue;
-            for (Player viewer : Bukkit.getOnlinePlayers()) {
-                applyVisibility(cam, viewer);
-            }
-        }
-    }
-
-    public void reloadPlugin(Player initiator) {
-        for (UUID uuid : new HashSet<>(cameraPlayers.keySet())) {
-            Player camPlayer = Bukkit.getPlayer(uuid);
-            if (camPlayer != null) {
-                camPlayer.sendMessage(getMessage("reload-exit"));
-                exitCameraMode(camPlayer);
-            }
-        }
-        reloadConfig();
-        loadConfigValues();
-        setupNoCollisionTeam();
-        for (Player online : Bukkit.getOnlinePlayers()) {
-            updateViewerTeam(online);
-        }
-    }
-
-    // *** CameraData Klasse erweitert ***
-    private static class CameraData {
-        private final ArmorStand armorStand;
-        private final Villager hitbox;
-        private final GameMode originalGameMode;
-        private final boolean originalAllowFlight;
-        private final boolean originalFlying;
-        private final boolean originalSilent;
-        private final ItemStack[] originalInventoryContents; // Für Inventar
-        private final ItemStack[] originalArmorContents;     // Für Rüstung
-        private final Collection<PotionEffect> pausedEffects;
-
-        public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents, Collection<PotionEffect> pausedEffects) {
-            this.armorStand = armorStand;
-            this.hitbox = hitbox;
-            this.originalGameMode = originalGameMode;
-            this.originalAllowFlight = originalAllowFlight;
-            this.originalFlying = originalFlying;
-            this.originalSilent = originalSilent;
-            this.originalInventoryContents = originalInventoryContents;
-            this.originalArmorContents = originalArmorContents;
-            this.pausedEffects = pausedEffects;
-        }
-
-        public ArmorStand getArmorStand() { return armorStand; }
-        public Villager getHitbox() { return hitbox; }
-        public GameMode getOriginalGameMode() { return originalGameMode; }
-        public boolean getOriginalAllowFlight() { return originalAllowFlight; }
-        public boolean getOriginalFlying() { return originalFlying; }
-        public boolean getOriginalSilent() { return originalSilent; }
-        public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }        public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
-        public Collection<PotionEffect> getPausedEffects() { return pausedEffects; }
+        case ALL -> viewer.showPlayer(this, camPlayer);
+        case NONE -> viewer.hidePlayer(this, camPlayer);
     }
 }
+
+private void updateVisibilityForAll() {
+    for (UUID camId : cameraPlayers.keySet()) {
+        Player cam = Bukkit.getPlayer(camId);
+        if (cam == null) continue;
+        for (Player viewer : Bukkit.getOnlinePlayers()) {
+            applyVisibility(cam, viewer);
+        }
+    }
+}
+
+public void reloadPlugin(Player initiator) {
+    for (UUID uuid : new HashSet<>(cameraPlayers.keySet())) {
+        Player camPlayer = Bukkit.getPlayer(uuid);
+        if (camPlayer != null) {
+            camPlayer.sendMessage(getMessage("reload-exit"));
+            exitCameraMode(camPlayer);
+        }
+    }
+    reloadConfig();
+    loadConfigValues();
+    setupNoCollisionTeam();
+    for (Player online : Bukkit.getOnlinePlayers()) {
+        updateViewerTeam(online);
+    }
+}
+
+// *** CameraData Klasse erweitert ***
+private static class CameraData {
+    private final ArmorStand armorStand;
+    private final Villager hitbox;
+    private final GameMode originalGameMode;
+    private final boolean originalAllowFlight;
+    private final boolean originalFlying;
+    private final boolean originalSilent;
+    private final ItemStack[] originalInventoryContents; // Für Inventar
+    private final ItemStack[] originalArmorContents;     // Für Rüstung
+    private final Collection<PotionEffect> pausedEffects;
+
+    public CameraData(ArmorStand armorStand, Villager hitbox, GameMode originalGameMode, boolean originalAllowFlight, boolean originalFlying, boolean originalSilent, ItemStack[] originalInventoryContents, ItemStack[] originalArmorContents, Collection<PotionEffect> pausedEffects) {
+        this.armorStand = armorStand;
+        this.hitbox = hitbox;
+        this.originalGameMode = originalGameMode;
+        this.originalAllowFlight = originalAllowFlight;
+        this.originalFlying = originalFlying;
+        this.originalSilent = originalSilent;
+        this.originalInventoryContents = originalInventoryContents;
+        this.originalArmorContents = originalArmorContents;
+        this.pausedEffects = pausedEffects;
+    }
+
+    public ArmorStand getArmorStand() { return armorStand; }
+    public Villager getHitbox() { return hitbox; }
+    public GameMode getOriginalGameMode() { return originalGameMode; }
+    public boolean getOriginalAllowFlight() { return originalAllowFlight; }
+    public boolean getOriginalFlying() { return originalFlying; }
+    public boolean getOriginalSilent() { return originalSilent; }
+    public ItemStack[] getOriginalInventoryContents() { return originalInventoryContents; }
+    public ItemStack[] getOriginalArmorContents() { return originalArmorContents; }
