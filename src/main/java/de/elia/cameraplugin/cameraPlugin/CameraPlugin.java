@@ -70,6 +70,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
     private boolean armorStandNameVisible;
     private boolean armorStandVisible;
     private boolean armorStandGravity;
+    private double armorStandDamageAmount;
+    private boolean armorDurabilityLoss;
+    private boolean damageIgnoreArmor;
     private VisibilityMode playerVisibilityMode;
     private boolean allowInvisibilityPotion;
     private Object Sound;
@@ -393,55 +396,62 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         }
 
         ArmorStand armorStand = cameraPlayers.get(ownerUUID).getArmorStand();
-        applyArmorDurabilityLoss(armorStand);
 
-        double reducedDamage;
+        boolean hitByPlayer = false;
+        String damagerName = "Umgebung";
+        DamageCause cause = event.getCause();
         if (event instanceof EntityDamageByEntityEvent hitEvent) {
             Entity damager = hitEvent.getDamager();
-            Player attacker = null;
-            ItemStack weapon = null;
-            boolean fullyCharged = true;
-
             if (damager instanceof Player p) {
-                attacker = p;
-                weapon = p.getInventory().getItemInMainHand();
-                fullyCharged = true;
+                hitByPlayer = true;
+                damagerName = p.getName();
             } else if (damager instanceof Projectile projectile && projectile.getShooter() instanceof Player p) {
-                attacker = p;
-                weapon = getProjectileWeapon(p);
-                fullyCharged = true;
+                hitByPlayer = true;
+                damagerName = p.getName();
                 applyProjectileEffects(projectile, owner);
-            }
-
-            if (attacker != null) {
-                reducedDamage = PreciseDamageCalculator.calculateDamage(attacker, armorStand, weapon,
-                        attacker.getFallDistance(), fullyCharged);
             } else {
-                reducedDamage = calculateFinalDamage(event, armorStand);
+                damagerName = damager.getType().toString();
             }
-        } else {
-            reducedDamage = calculateFinalDamage(event, armorStand);
         }
 
-
-        String damagerName = "Umgebung";
-        if (event instanceof EntityDamageByEntityEvent entityEvent) {
-            Entity damager = entityEvent.getDamager();
-            damagerName = damager instanceof Player ? damager.getName() : damager.getType().toString();
+        if (hitByPlayer) {
+            if (armorDurabilityLoss) {
+                applyArmorDurabilityLoss(armorStand);
+            }
+            double damage = armorStandDamageAmount;
+            double finalDamage = damageIgnoreArmor ? damage : calculateFixedDamage(damage, armorStand, cause);
+            String finalDamagerName = damagerName;
+            UUID targetUUID = ownerUUID;
+            exitCameraMode(owner);
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    if (owner.isOnline() && !owner.isDead()) {
+                        applyDirectDamage(owner, finalDamage);
+                        owner.sendMessage(getMessage("body-attacked").replace("{damager}", finalDamagerName));
+                    }
+                    pendingDamage.remove(targetUUID);
+                }
+            }.runTaskLater(CameraPlugin.this, 1L);
+            return;
         }
 
-        exitCameraMode(owner);
+        if (armorDurabilityLoss) {
+            applyArmorDurabilityLoss(armorStand);
+        }
+
+        double reducedDamage = calculateFinalDamage(event, armorStand);
 
         String finalDamagerName = damagerName;
-        double finalDamage = reducedDamage;
         UUID targetUUID = ownerUUID;
+        exitCameraMode(owner);
         new BukkitRunnable() {
             @Override
             public void run() {
                 if (owner.isOnline() && !owner.isDead()) {
-                    applyDirectDamage(owner, finalDamage);
                     String messageKey = event instanceof EntityDamageByEntityEvent ?
                             "body-attacked" : "body-env-damage";
+                    applyDirectDamage(owner, reducedDamage);
                     owner.sendMessage(getMessage(messageKey).replace("{damager}", finalDamagerName));
                 }
                 pendingDamage.remove(targetUUID);
@@ -979,6 +989,24 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         return damageAfterArmor * (1.0 - enchantmentReduction);
     }
 
+    /**
+     * Calculate reduced damage for a fixed base amount using the armor stand's
+     * equipment. This mirrors {@link #calculateFinalDamage(EntityDamageEvent, ArmorStand)}
+     * but allows specifying the base damage manually.
+     */
+    private double calculateFixedDamage(double baseDamage, ArmorStand armorStand, DamageCause cause) {
+        double damageAfterArmor = calculateArmorReducedDamage(baseDamage, armorStand);
+
+        int epf = 0;
+        for (ItemStack item : armorStand.getEquipment().getArmorContents()) {
+            if (item == null) continue;
+            epf += getEnchantmentProtectionFactor(item, cause);
+        }
+
+        double enchantmentReduction = Math.min(20, epf) / 25.0;
+        return damageAfterArmor * (1.0 - enchantmentReduction);
+    }
+
     private int getEnchantmentProtectionFactor(ItemStack item, DamageCause cause) {
         int epf = 0;
         if (item.getEnchantments().isEmpty()) return epf;
@@ -1181,6 +1209,9 @@ public final class CameraPlugin extends JavaPlugin implements Listener {
         armorStandNameVisible = getConfig().getBoolean("armorstand.name-visible", true);
         armorStandVisible = getConfig().getBoolean("armorstand.visible", true);
         armorStandGravity = getConfig().getBoolean("armorstand.gravity", true);
+        armorStandDamageAmount = getConfig().getDouble("armorstand.damage-amount", 1.0);
+        armorDurabilityLoss = getConfig().getBoolean("armorstand.durability-loss", true);
+        damageIgnoreArmor = getConfig().getBoolean("armorstand.damage-ignore-armor", true);
     }
 
     private void setupNoCollisionTeam() {

@@ -31,3 +31,6 @@ camera-mode:
 armorstand.name-visible: true
 armorstand.visible: true
 armorstand.gravity: true
+armorstand.damage-amount: 1.0
+armorstand.durability-loss: true
+armorstand.damage-ignore-armor: true
